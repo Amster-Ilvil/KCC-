@@ -33,7 +33,7 @@ jobs:
 
     steps:
       - name: Checkout customization repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
 
       - name: Confirm Apple Silicon runner
         shell: bash
@@ -48,7 +48,6 @@ jobs:
         with:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
-          cache: pip
 
       - name: Fetch official KCC 11.0.1 source
         shell: bash
@@ -62,13 +61,26 @@ jobs:
           echo "Official commit: $ACTUAL"
           test "$ACTUAL" = "$UPSTREAM_COMMIT"
 
-      - name: Apply Kindle Chinese patch
+      - name: Apply and validate Kindle Chinese patch
         shell: bash
         run: |
           set -euo pipefail
           python -m py_compile patch/patch_kcc.py patch/kindle_cn_ui.py
           python patch/patch_kcc.py upstream
           python -m py_compile upstream/kindlecomicconverter/KCC_gui.py upstream/kindlecomicconverter/kindle_cn_ui.py
+
+          # Guardrails: required customizations must be present and unwanted product surfaces absent.
+          grep -q 'apply_kindle_cn_ui(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
+          grep -q 'Kindle 专用 · 简体中文 · 无广告/推广' upstream/kindlecomicconverter/KCC_gui.py
+          grep -q 'self.versionCheck.start()' upstream/kindlecomicconverter/KCC_gui.py && {
+            echo 'ERROR: version/announcement thread is still enabled'; exit 1;
+          } || true
+          grep -q '"Kobo Clara' upstream/kindlecomicconverter/KCC_gui.py && {
+            echo 'ERROR: Kobo profiles remain in GUI source after patch'; exit 1;
+          } || true
+          grep -q 'GUI.kofiButton.clicked.connect' upstream/kindlecomicconverter/KCC_gui.py && {
+            echo 'ERROR: Ko-fi button connection remains'; exit 1;
+          } || true
 
       - name: Install build dependencies
         shell: bash
@@ -109,12 +121,19 @@ jobs:
           NEW="dist/${PRODUCT_NAME}.app"
           mv "$OLD" "$NEW"
           PLIST="$NEW/Contents/Info.plist"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleName ${PRODUCT_NAME}" "$PLIST" || true
-          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${PRODUCT_NAME}" "$PLIST" || true
-          /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string io.github.amster-ilvil.kcc-kindle-cn" "$PLIST" 2>/dev/null || \
-            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier io.github.amster-ilvil.kcc-kindle-cn" "$PLIST"
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.0.0" "$PLIST" || true
-          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1" "$PLIST" || true
+
+          plist_set() {
+            local key="$1" type="$2" value="$3"
+            /usr/libexec/PlistBuddy -c "Set :${key} ${value}" "$PLIST" 2>/dev/null || \
+              /usr/libexec/PlistBuddy -c "Add :${key} ${type} ${value}" "$PLIST"
+          }
+
+          plist_set CFBundleName string "$PRODUCT_NAME"
+          plist_set CFBundleDisplayName string "$PRODUCT_NAME"
+          plist_set CFBundleIdentifier string "io.github.amster-ilvil.kcc-kindle-cn"
+          plist_set CFBundleShortVersionString string "1.0.0"
+          plist_set CFBundleVersion string "1"
+          plist_set NSHighResolutionCapable bool true
           plutil -lint "$PLIST"
 
       - name: Ad-hoc sign app and verify
@@ -125,17 +144,17 @@ jobs:
           APP="dist/${PRODUCT_NAME}.app"
           xattr -cr "$APP" || true
 
-          # Sign nested Mach-O binaries first. This avoids relying on --deep as a signing strategy.
+          # Sign nested Mach-O binaries first. Avoid using --deep as the signing strategy.
           while IFS= read -r -d '' f; do
             if /usr/bin/file "$f" | grep -q 'Mach-O'; then
               /usr/bin/codesign --force --sign - --timestamp=none "$f"
             fi
           done < <(find "$APP/Contents" -type f -print0)
 
-          # Sign nested bundles/frameworks from deepest path upward.
+          # Framework bundles must be signed after their contents.
           while IFS= read -r bundle; do
-            /usr/bin/codesign --force --sign - --timestamp=none "$bundle" || true
-          done < <(find "$APP/Contents" \( -name '*.framework' -o -name '*.dylib' -o -name '*.so' \) -print | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
+            [ -n "$bundle" ] && /usr/bin/codesign --force --sign - --timestamp=none "$bundle"
+          done < <(find "$APP/Contents" -type d -name '*.framework' -print | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
 
           /usr/bin/codesign --force --sign - --timestamp=none "$APP"
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
@@ -152,6 +171,7 @@ jobs:
           /usr/bin/file "$EXE" | tee ../binary-info.txt
           /usr/bin/file "$EXE" | grep -q 'arm64'
           plutil -p "$APP/Contents/Info.plist" | tee ../plist-info.txt
+          strings "$EXE" | grep -q 'Kindle Comic Converter' || true
 
       - name: Package .app zip preserving macOS metadata
         shell: bash
