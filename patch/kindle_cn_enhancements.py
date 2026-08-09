@@ -8,10 +8,11 @@ from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QLabel, QPushButton, QHBoxLayout
+from PySide6.QtWidgets import QLabel, QPushButton, QHBoxLayout, QSystemTrayIcon
 
 ACCENT = "#2F6FEB"
 MUTED = "#6E7781"
+_TRAY_PATCHED = False
 
 
 def _set_check(widget, state):
@@ -30,6 +31,22 @@ def _source_count(job_list):
     return count
 
 
+def _install_safe_tray_show():
+    """Avoid meaningless tray warnings on offscreen/headless Qt platforms."""
+    global _TRAY_PATCHED
+    if _TRAY_PATCHED:
+        return
+    original_show = QSystemTrayIcon.show
+
+    def safe_show(tray):
+        if tray.isSystemTrayAvailable() and not tray.icon().isNull():
+            return original_show(tray)
+        return None
+
+    QSystemTrayIcon.show = safe_show
+    _TRAY_PATCHED = True
+
+
 def install_enhancements(ui, window):
     """Add queue statistics, device guidance and one-click safe presets."""
     # Use the native macOS UI font instead of Qt's generic Sans Serif alias.
@@ -37,6 +54,7 @@ def install_enhancements(ui, window):
         window.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont))
     except Exception:
         pass
+    _install_safe_tray_show()
 
     # --- Queue summary -----------------------------------------------------
     queue_parent = ui.jobList.parentWidget()
