@@ -1,9 +1,10 @@
 # -*- coding: utf-8 -*-
-"""KindleGen discovery and compatibility guard for KCC Kindle CN.
+"""MOBI/AZW3 engine discovery for KCC Kindle CN.
 
-The upstream KCC invokes ``kindlegen`` by name.  This layer adds a deterministic
-search order suitable for a self-contained macOS app while refusing legacy
-32-bit Mach-O builds that modern macOS cannot execute.
+The KCC conversion core still speaks the historical kindlegen command line.
+This module resolves a compatible executable in a deterministic order.  It
+supports both Amazon KindleGen and Kindling's documented kindlegen-compat mode,
+and rejects legacy 32-bit Mach-O programs that modern macOS cannot execute.
 """
 from __future__ import annotations
 
@@ -26,6 +27,7 @@ class KindleGenStatus:
     version: str = ""
     architecture: str = ""
     reason: str = ""
+    engine: str = ""  # "kindling" | "kindlegen" | ""
 
 
 class KindleGenUnavailable(OSError):
@@ -37,7 +39,6 @@ def _app_contents() -> Path | None:
         return None
     try:
         exe = Path(sys.executable).resolve()
-        # .../Foo.app/Contents/MacOS/Foo -> .../Foo.app/Contents
         if exe.parent.name == "MacOS" and exe.parent.parent.name == "Contents":
             return exe.parent.parent
         for parent in exe.parents:
@@ -57,12 +58,13 @@ def candidate_paths() -> list[tuple[Path, str]]:
 
     contents = _app_contents()
     if contents is not None:
+        # v1.3 release places Kindling here under the historical executable
+        # name so the mature KCC MOBI worker can keep its proven CLI flow.
         candidates.extend([
-            (contents / "Resources" / "tools" / "kindlegen", "App 内置 KindleGen"),
-            (contents / "Resources" / "kindlegen", "App 内置 KindleGen"),
+            (contents / "Resources" / "tools" / "kindlegen", "App 内置 MOBI 引擎"),
+            (contents / "Resources" / "kindlegen", "App 内置 MOBI 引擎"),
         ])
 
-    # Development/source-build location. This also makes CI tests deterministic.
     package_root = Path(__file__).resolve().parent.parent
     candidates.extend([
         (package_root / "tools" / "kindlegen", "源码 tools 目录"),
@@ -81,7 +83,6 @@ def candidate_paths() -> list[tuple[Path, str]]:
     if found:
         candidates.append((Path(found), "PATH"))
 
-    # Deduplicate while preserving priority.
     seen: set[str] = set()
     result: list[tuple[Path, str]] = []
     for path, source in candidates:
@@ -130,10 +131,27 @@ def _legacy_32bit_macos(desc: str) -> bool:
     return platform.system() == "Darwin" and has_legacy and not has_modern
 
 
-def _version_from_output(output: str) -> str:
-    # Typical output includes "Amazon kindlegen(MAC OSX) V2.9 build ..."
+def _kindlegen_version(output: str) -> str:
     match = re.search(r"Amazon\s+kindlegen.*?\bV([0-9]+(?:\.[0-9]+)+)", output, re.I | re.S)
     return match.group(1) if match else ""
+
+
+def _kindling_version(output: str) -> str:
+    # clap normally prints "kindling 0.31.0"; tolerate kindling-cli and v-prefix.
+    match = re.search(r"\bkindling(?:-cli)?\b[^0-9]{0,16}v?([0-9]+(?:\.[0-9]+){1,3})", output, re.I)
+    return match.group(1) if match else ""
+
+
+def _run(path: Path, args: list[str], timeout: int = 12) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [os.fspath(path), *args],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="ignore",
+        timeout=timeout,
+        check=False,
+    )
 
 
 def _probe(path: Path, source: str) -> KindleGenStatus:
@@ -150,40 +168,77 @@ def _probe(path: Path, source: str) -> KindleGenStatus:
         arch = _arch_from_description(desc)
         if _legacy_32bit_macos(desc):
             return KindleGenStatus(
-                False,
-                os.fspath(path),
-                source,
+                usable=False,
+                path=os.fspath(path),
+                source=source,
                 architecture=arch,
                 reason="这是 32 位 i386/PowerPC KindleGen，现代 macOS 与 Apple Silicon 无法运行",
             )
 
-        proc = subprocess.run(
-            [os.fspath(path), "-locale", "en"],
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            text=True,
-            errors="ignore",
-            timeout=12,
-            check=False,
-        )
-        output = proc.stdout or ""
-        version = _version_from_output(output)
-
-        # KindleGen commonly returns a non-zero code for version/help probes, so
-        # identify it by output rather than requiring rc==0.
-        if "kindlegen" not in output.lower():
+        # Kindling has a normal --version path. Probe it first so its own version
+        # is not confused with Amazon KindleGen's unrelated 2.9 numbering.
+        version_probe = _run(path, ["--version"], timeout=8)
+        version_output = version_probe.stdout or ""
+        if "kindling" in version_output.lower():
+            version = _kindling_version(version_output)
+            if version_probe.returncode == 0:
+                return KindleGenStatus(
+                    usable=True,
+                    path=os.fspath(path),
+                    source=source,
+                    version=version,
+                    architecture=arch,
+                    engine="kindling",
+                )
             return KindleGenStatus(
-                False, os.fspath(path), source, version, arch,
-                f"无法确认 KindleGen 可用（退出码 {proc.returncode}）",
+                usable=False,
+                path=os.fspath(path),
+                source=source,
+                version=version,
+                architecture=arch,
+                reason=f"Kindling 版本探测失败（退出码 {version_probe.returncode}）",
+                engine="kindling",
             )
-        return KindleGenStatus(True, os.fspath(path), source, version, arch, "")
+
+        # Real KindleGen has no reliable --version switch. Its historical
+        # `-locale en` probe emits the Amazon kindlegen banner even if the
+        # process returns non-zero, which is why identity is based on output.
+        legacy_probe = _run(path, ["-locale", "en"])
+        legacy_output = legacy_probe.stdout or ""
+        if "kindlegen" in legacy_output.lower() or "kindlegen" in version_output.lower():
+            combined = version_output + "\n" + legacy_output
+            return KindleGenStatus(
+                usable=True,
+                path=os.fspath(path),
+                source=source,
+                version=_kindlegen_version(combined),
+                architecture=arch,
+                engine="kindlegen",
+            )
+
+        return KindleGenStatus(
+            usable=False,
+            path=os.fspath(path),
+            source=source,
+            architecture=arch,
+            reason=f"无法确认 MOBI 引擎兼容 KindleGen CLI（退出码 {legacy_probe.returncode}）",
+        )
     except subprocess.TimeoutExpired:
-        return KindleGenStatus(False, os.fspath(path), source, architecture=_arch_from_description(_file_description(path)),
-                               reason="KindleGen 启动超时")
+        return KindleGenStatus(
+            False,
+            os.fspath(path),
+            source,
+            architecture=_arch_from_description(_file_description(path)),
+            reason="MOBI 引擎启动超时",
+        )
     except OSError as exc:
-        reason = exc.strerror or str(exc)
-        return KindleGenStatus(False, os.fspath(path), source, architecture=_arch_from_description(_file_description(path)),
-                               reason=reason)
+        return KindleGenStatus(
+            False,
+            os.fspath(path),
+            source,
+            architecture=_arch_from_description(_file_description(path)),
+            reason=exc.strerror or str(exc),
+        )
     except Exception as exc:
         return KindleGenStatus(False, os.fspath(path), source, reason=str(exc))
 
@@ -201,9 +256,16 @@ def find_kindlegen() -> KindleGenStatus:
 
     if failures:
         first = failures[0]
-        detail = first.reason or "检测失败"
-        return KindleGenStatus(False, first.path, first.source, first.version, first.architecture, detail)
-    return KindleGenStatus(False, reason="未找到 KindleGen")
+        return KindleGenStatus(
+            False,
+            first.path,
+            first.source,
+            first.version,
+            first.architecture,
+            first.reason or "检测失败",
+            first.engine,
+        )
+    return KindleGenStatus(False, reason="未找到可用的 MOBI/AZW3 引擎")
 
 
 def refresh_kindlegen() -> KindleGenStatus:
@@ -215,16 +277,22 @@ def get_kindlegen_path() -> str:
     status = find_kindlegen()
     if status.usable and status.path:
         return status.path
-    raise KindleGenUnavailable(status.reason or "未找到可运行的 KindleGen")
+    raise KindleGenUnavailable(status.reason or "未找到可运行的 MOBI/AZW3 引擎")
 
 
 def diagnostic_text(status: KindleGenStatus | None = None) -> str:
     status = status or find_kindlegen()
+    arch = ""
+    if status.architecture and status.architecture != "unknown":
+        arch = f" · {status.architecture}"
+
     if status.usable:
         version = f" v{status.version}" if status.version else ""
-        arch = f" · {status.architecture}" if status.architecture and status.architecture != "unknown" else ""
+        if status.engine == "kindling":
+            return f"Kindling{version}：可用（{status.source}{arch} · KindleGen 兼容模式）"
         return f"KindleGen{version}：可用（{status.source}{arch}）"
+
     if status.path:
-        arch = f"（{status.architecture}）" if status.architecture and status.architecture != "unknown" else ""
-        return f"KindleGen 不可用：{status.reason}{arch}"
-    return "KindleGen 未安装：MOBI/AZW3 输出不可用"
+        prefix = "Kindling" if status.engine == "kindling" else "MOBI 引擎"
+        return f"{prefix}不可用：{status.reason}{arch}"
+    return "MOBI/AZW3 引擎不可用"
