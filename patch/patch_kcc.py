@@ -20,6 +20,7 @@ def patch_gui(path: Path):
     shutil.copy2(path, path.with_suffix(path.suffix+".official.bak"))
     text=one(text,"from . import KCC_ui_editor\n","from . import KCC_ui_editor\nfrom .kindle_cn_ui import apply_kindle_cn_ui, apply_meta_editor_cn, translate_runtime_message\n","导入中文 UI")
 
+    # Disable upstream update/announcement/promotion networking entirely.
     p=re.compile(r"(class VersionThread\(QThread\):.*?\n    def run\(self\):\n)(.*?)(\n    def setAnswer\(self, dialoganswer\):)",re.S)
     m=p.search(text)
     if not m: fail("无法定位 VersionThread.run")
@@ -28,6 +29,8 @@ def patch_gui(path: Path):
     text=one(text,"        self.setupUi(MW)\n        self.editor = KCCGUI_MetaEditor()\n","        self.setupUi(MW)\n        apply_kindle_cn_ui(self, MW)\n        self.editor = KCCGUI_MetaEditor()\n","主界面入口")
     text=one(text,"        self.settings = QSettings('ciromattia', 'kcc10')\n","        self.settings = QSettings('KCC-Kindle-CN', 'kcc11-kindle-only')\n","独立设置")
 
+    # Kindle-focused output list. Indexes 0..3 remain compatible with upstream
+    # profile defaults (MOBI, EPUB, CBZ, PDF).
     a=text.find("        self.formats = {"); b=text.find("        self.profiles = {",a)
     if a<0 or b<0: fail("无法定位输出格式块")
     formats='''        self.formats = {  # Kindle-only; keep upstream indexes 0..3 compatible
@@ -39,12 +42,62 @@ def patch_gui(path: Path):
         }\n\n'''
     text=text[:a]+formats+text[b:]
 
-    marker="        profilesGUI = [\n"; pos=text.find(marker)
-    if pos<0: fail("无法定位 profilesGUI")
-    text=text[:pos]+"        # 产品界面和运行配置均只保留 Kindle。\n        self.profiles = {n: d for n, d in self.profiles.items() if n.startswith('Kindle')}\n\n"+text[pos:]
-    a=text.find("        profilesGUI = ["); b=text.find("        link_dict = {",a)
-    if a<0 or b<0: fail("无法定位设备列表/推广链接")
-    profiles='''        profilesGUI = [
+    # Replace the complete upstream device-profile block, rather than merely
+    # hiding Kobo/reMarkable at runtime. This makes the product genuinely
+    # Kindle-only while preserving all Kindle profile labels used by image.py.
+    a=text.find("        self.profiles = {")
+    b=text.find("        link_dict = {", a)
+    if a<0 or b<0: fail("无法定位设备配置块")
+    kindle_profiles='''        self.profiles = {
+            "Kindle Oasis 9/10": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                 'DefaultUpscale': True, 'ForceColor': False, 'Label': 'KO'},
+            "Kindle 8/10": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                       'DefaultUpscale': False, 'ForceColor': False, 'Label': 'K810'},
+            "Kindle Oasis 8": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                             'DefaultUpscale': True, 'ForceColor': False, 'Label': 'KPW34'},
+            "Kindle Voyage": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                              'DefaultUpscale': True, 'ForceColor': False, 'Label': 'KV'},
+            "Kindle 1860x1920": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                 'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KS1860'},
+            "Kindle 1920x1920": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                 'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KS1920'},
+            "Kindle 1240x1860": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                 'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KS1240'},
+            "Kindle 1324x1986": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                 'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KS1324'},
+            "Kindle Scribe 1/2": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                  'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KS'},
+            "Kindle Scribe 3": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 3,
+                                'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KS3'},
+            "Kindle Scribe Colorsoft": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 3,
+                                         'DefaultUpscale': False, 'ForceColor': True, 'Label': 'KSCS'},
+            "Kindle 11": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                          'DefaultUpscale': True, 'ForceColor': False, 'Label': 'K11'},
+            "Kindle Paperwhite 11": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                     'DefaultUpscale': True, 'ForceColor': False, 'Label': 'KPW5'},
+            "Kindle Paperwhite 12": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                     'DefaultUpscale': True, 'ForceColor': False, 'Label': 'KPW6'},
+            "Kindle Colorsoft": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                 'DefaultUpscale': True, 'ForceColor': True, 'Label': 'KCS'},
+            "Kindle Paperwhite 7/10": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                       'DefaultUpscale': True, 'ForceColor': False, 'Label': 'KPW34'},
+            "Kindle Paperwhite 5/6": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                                      'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KPW'},
+            "Kindle 4/5/7": {'PVOptions': True, 'ForceExpert': False, 'DefaultFormat': 0,
+                             'DefaultUpscale': False, 'ForceColor': False, 'Label': 'K57'},
+            "Kindle DX": {'PVOptions': False, 'ForceExpert': False, 'DefaultFormat': 2,
+                          'DefaultUpscale': False, 'ForceColor': False, 'Label': 'KDX'},
+            "Kindle 1": {'PVOptions': False, 'ForceExpert': False, 'DefaultFormat': 0,
+                         'DefaultUpscale': False, 'ForceColor': False, 'Label': 'K1'},
+            "Kindle 2": {'PVOptions': False, 'ForceExpert': False, 'DefaultFormat': 0,
+                         'DefaultUpscale': False, 'ForceColor': False, 'Label': 'K2'},
+            "Kindle Keyboard": {'PVOptions': False, 'ForceExpert': False, 'DefaultFormat': 0,
+                                'DefaultUpscale': False, 'ForceColor': False, 'Label': 'K34'},
+            "Kindle Touch": {'PVOptions': False, 'ForceExpert': False, 'DefaultFormat': 0,
+                             'DefaultUpscale': False, 'ForceColor': False, 'Label': 'K34'},
+        }
+
+        profilesGUI = [
             "Kindle Scribe Colorsoft", "Kindle Scribe 3", "Kindle Colorsoft",
             "Kindle Paperwhite 12", "Kindle Scribe 1/2", "Kindle Paperwhite 11",
             "Kindle 11", "Kindle Oasis 9/10", "Separator",
@@ -52,9 +105,12 @@ def patch_gui(path: Path):
             "Kindle 8/10", "Kindle Oasis 8", "Kindle Paperwhite 7/10", "Kindle Voyage",
             "Kindle Paperwhite 5/6", "Kindle 4/5/7", "Kindle Touch", "Kindle Keyboard",
             "Kindle DX", "Kindle 2", "Kindle 1",
-        ]\n\n'''
-    text=text[:a]+profiles+text[b:]
+        ]
 
+'''
+    text=text[:a]+kindle_profiles+text[b:]
+
+    # Remove status-bar external links and all promotion entry points.
     a=text.find("        link_dict = {"); b=text.find("        self.tar = TAR in available_archive_tools()",a)
     if a<0 or b<0: fail("无法定位推广块")
     clean='''        statusBarLabel = QLabel("Kindle 专用 · 简体中文 · 无广告/推广")
@@ -70,6 +126,8 @@ def patch_gui(path: Path):
     text=one(text,"        self.versionCheck.start()\n","        # Kindle 中文版：不启动联网检查线程。\n","禁用联网线程")
     text=one(text,'        MW.setWindowTitle("Kindle Comic Converter " + __version__)\n','        MW.setWindowTitle("Kindle 漫画转换器 " + __version__ + " 中文版")\n',"窗口标题")
 
+    # Translate the common runtime surfaces while keeping all internal keys,
+    # command-line switches and metadata field names unchanged.
     text=one(text,"    def addMessage(self, message, icon, replace=False):\n        if icon != '':\n","    def addMessage(self, message, icon, replace=False):\n        message = translate_runtime_message(message)\n        if icon != '':\n","消息翻译")
     text=one(text,"    def showDialog(self, message, kind):\n        if kind == 'error':\n            QMessageBox.critical(MW, 'KCC - Error', message, QMessageBox.StandardButton.Ok)\n","    def showDialog(self, message, kind):\n        message = translate_runtime_message(message)\n        if kind == 'error':\n            QMessageBox.critical(MW, 'KCC - 错误', message, QMessageBox.StandardButton.Ok)\n","对话框翻译")
     text=text.replace("QMessageBox.question(MW, 'KCC - Question', message,","QMessageBox.question(MW, 'KCC - 确认', message,")
