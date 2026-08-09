@@ -40,8 +40,6 @@ def prepare_oxipng(root: Path) -> bool:
     if binary.is_file() and license_file.is_file():
         return True
 
-    # Local source builds remain dependency-free. Pillow is the safe PNG
-    # fallback there. Official GitHub release builds always bundle OxiPNG.
     if os.environ.get("GITHUB_ACTIONS", "").lower() != "true" or sys.platform != "darwin":
         print("[提示] 本地源码构建未发现 OxiPNG，将使用 Pillow 无损 PNG 优化后备。")
         return False
@@ -54,16 +52,7 @@ def prepare_oxipng(root: Path) -> bool:
     shutil.rmtree(install_root, ignore_errors=True)
     print(f"[构建] OxiPNG v{OXIPNG_VERSION} Apple Silicon")
     subprocess.run(
-        [
-            cargo,
-            "install",
-            "oxipng",
-            "--version",
-            OXIPNG_VERSION,
-            "--locked",
-            "--root",
-            os.fspath(install_root),
-        ],
+        [cargo, "install", "oxipng", "--version", OXIPNG_VERSION, "--locked", "--root", os.fspath(install_root)],
         check=True,
     )
 
@@ -147,6 +136,21 @@ def patch_gui(path: Path):
             "加入 MOBI/AZW3 引擎运行时检测",
         )
 
+    if "install_compression_ui" not in text:
+        text = replace_once(
+            text,
+            "from .kindlegen_runtime import refresh_kindlegen, diagnostic_text\n",
+            "from .kindlegen_runtime import refresh_kindlegen, diagnostic_text\n"
+            "from .kindle_cn_compression_ui import install_compression_ui\n",
+            "加入智能压缩 UI",
+        )
+        text = replace_once(
+            text,
+            "        install_enhancements(self, MW)\n        self.editor = KCCGUI_MetaEditor()\n",
+            "        install_enhancements(self, MW)\n        install_compression_ui(self, MW)\n        self.editor = KCCGUI_MetaEditor()\n",
+            "启用智能压缩 UI",
+        )
+
     text = text.replace(
         'statusBarLabel = QLabel("Kindle 专用 · 简体中文 · 无广告/推广")',
         'statusBarLabel = QLabel("Kindle 专用 · 简体中文")',
@@ -219,7 +223,7 @@ def patch_gui(path: Path):
         text = text[:worker_start] + worker + text[worker_end:]
 
     path.write_text(text, encoding="utf-8")
-    print("[完成] GUI MOBI/AZW3 引擎与错误状态加固")
+    print("[完成] GUI MOBI/AZW3 引擎、错误状态与智能压缩入口加固")
 
 
 def patch_core(path: Path):
@@ -294,12 +298,15 @@ def main():
     compression_dst = root / "kindlecomicconverter" / "kindle_cn_compress.py"
     scan_src = patch_dir / "kindle_cn_scan_processing.py"
     scan_dst = root / "kindlecomicconverter" / "kindle_cn_scan_processing.py"
+    compression_ui_src = patch_dir / "kindle_cn_compression_ui.py"
+    compression_ui_dst = root / "kindlecomicconverter" / "kindle_cn_compression_ui.py"
     if not gui.is_file() or not core.is_file() or not spec.is_file():
         fail("目标源码不完整")
     for source, label in (
         (runtime_src, "kindlegen_runtime.py"),
         (compression_src, "kindle_cn_compress.py"),
         (scan_src, "kindle_cn_scan_processing.py"),
+        (compression_ui_src, "kindle_cn_compression_ui.py"),
     ):
         if not source.is_file():
             fail(f"缺少 {label}")
@@ -307,6 +314,7 @@ def main():
     shutil.copy2(runtime_src, runtime_dst)
     shutil.copy2(scan_src, scan_dst)
     shutil.copy2(compression_src, compression_dst)
+    shutil.copy2(compression_ui_src, compression_ui_dst)
     bundle_oxipng = prepare_oxipng(root)
     patch_macos_spec(spec, bundle_oxipng)
     patch_gui(gui)
