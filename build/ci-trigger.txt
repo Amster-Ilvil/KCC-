@@ -1,0 +1,1 @@
+KCC Kindle 中文版首次 macOS Apple Silicon 构建验证。
