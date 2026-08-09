@@ -38,6 +38,7 @@ env:
   KINDLING_REPO: ciscoriordan/kindling
   KINDLING_TAG: v0.31.0
   KINDLING_ASSET: kindling-cli-mac-apple-silicon
+  BUNDLE_ID: org.kcc.kindlecn
 
 jobs:
   build:
@@ -48,6 +49,12 @@ jobs:
     steps:
       - name: Checkout customization repo
         uses: actions/checkout@v6
+
+      - name: Privacy scan
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 build/privacy_scan.py .
 
       - name: Confirm Apple Silicon runner
         shell: bash
@@ -286,7 +293,7 @@ jobs:
           /usr/bin/file "$APP/Contents/MacOS/Kindle Comic Converter" | tee ../binary-info.txt
           grep -q 'arm64' ../binary-info.txt
 
-      - name: Rename app, set metadata, and embed Kindling
+      - name: Rename app, set privacy-safe metadata, and embed Kindling
         shell: bash
         working-directory: upstream
         run: |
@@ -303,12 +310,16 @@ jobs:
           }
           plist_set CFBundleName string "$PRODUCT_NAME"
           plist_set CFBundleDisplayName string "$PRODUCT_NAME"
-          plist_set CFBundleIdentifier string "io.github.amster-ilvil.kcc-kindle-cn"
+          plist_set CFBundleIdentifier string "$BUNDLE_ID"
           plist_set CFBundleShortVersionString string "$PRODUCT_VERSION"
           plist_set CFBundleVersion string "4"
           plist_set NSHighResolutionCapable bool true
           plutil -lint "$PLIST"
           plutil -p "$PLIST" | tee ../plist-info.txt
+          grep -q "$BUNDLE_ID" ../plist-info.txt
+          if grep -qi 'amster-ilvil' "$PLIST"; then
+            echo 'ERROR: personal repository owner identifier leaked into App metadata'; exit 1
+          fi
 
           mkdir -p "$NEW/Contents/Resources/tools" "$NEW/Contents/Resources/licenses"
           cp tools/kindlegen "$NEW/Contents/Resources/tools/kindlegen"
@@ -396,11 +407,13 @@ jobs:
           {
             echo "KCC Kindle 中文版 build report"
             echo "Product: ${PRODUCT_VERSION}"
+            echo "Bundle ID: ${BUNDLE_ID}"
             echo "Upstream KCC: v11.0.1 @ ${UPSTREAM_COMMIT}"
             echo "Bundled MOBI engine: Kindling ${KINDLING_TAG} / Apple Silicon arm64"
             echo "Kindling asset digest: ${KINDLING_DIGEST}"
             echo "Runner: $(sw_vers -productVersion) / $(uname -m)"
             echo "Python: $(python --version 2>&1)"
+            echo "Privacy scan: PASS"
             echo "Tests: resolver PASS; EPUB PASS; CBZ PASS; MOBI/AZW3 + KCC post-fix PASS; Qt startup PASS"
             echo "Built: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
             echo
