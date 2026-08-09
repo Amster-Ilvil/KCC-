@@ -1,0 +1,34 @@
+name: Apply v1.5 smart compression speed fix
+
+on:
+  push:
+    branches: [ fix/v15-smart-speed ]
+    paths:
+      - 'build/apply_v15_smart_speed_fix.py'
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: fix/v15-smart-speed
+          fetch-depth: 0
+      - name: Apply exact source transformation
+        run: python3 build/apply_v15_smart_speed_fix.py
+      - name: Validate and commit
+        run: |
+          set -euo pipefail
+          python3 -m py_compile patch/kindle_cn_compress.py
+          git diff --check
+          git diff -- patch/kindle_cn_compress.py
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git add patch/kindle_cn_compress.py
+          if ! git diff --cached --quiet; then
+            git commit -m '优化默认智能压缩速度：Zopfli 仅保留给极限档'
+            git push origin HEAD:fix/v15-smart-speed
+          fi
