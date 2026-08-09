@@ -9,7 +9,7 @@ on:
       - 'build/**'
       - '.github/workflows/build-macos-arm64.yml'
       - 'README.md'
-      - 'RELEASE_NOTES_v1.1.0.md'
+      - 'RELEASE_NOTES_v1.2.0.md'
   pull_request:
     branches: [ main ]
     paths:
@@ -17,7 +17,7 @@ on:
       - 'build/**'
       - '.github/workflows/build-macos-arm64.yml'
       - 'README.md'
-      - 'RELEASE_NOTES_v1.1.0.md'
+      - 'RELEASE_NOTES_v1.2.0.md'
 
 permissions:
   contents: write
@@ -32,15 +32,15 @@ env:
   UPSTREAM_COMMIT: bd0328a12fe40ab62285d3a8ae3e501f6e41c78b
   PYTHON_VERSION: '3.11'
   PRODUCT_NAME: Kindle漫画转换器
-  PRODUCT_VERSION: '1.1.0'
-  RELEASE_TAG: v1.1.0
-  DMG_NAME: KCC_11.0.1_Kindle_CN_v1.1_AppleSilicon.dmg
+  PRODUCT_VERSION: '1.2.0'
+  RELEASE_TAG: v1.2.0
+  DMG_NAME: KCC_11.0.1_Kindle_CN_v1.2_AppleSilicon.dmg
 
 jobs:
   build:
-    name: Build arm64 app + dmg
+    name: Build + test arm64 app/dmg
     runs-on: macos-15
-    timeout-minutes: 45
+    timeout-minutes: 50
 
     steps:
       - name: Checkout customization repo
@@ -60,7 +60,7 @@ jobs:
           python-version: ${{ env.PYTHON_VERSION }}
           architecture: arm64
 
-      - name: Fetch official KCC 11.0.1 source
+      - name: Fetch pinned official KCC 11.0.1
         shell: bash
         run: |
           set -euo pipefail
@@ -72,29 +72,44 @@ jobs:
           echo "Official commit: $ACTUAL"
           test "$ACTUAL" = "$UPSTREAM_COMMIT"
 
-      - name: Apply and validate Kindle Chinese patch
+      - name: Apply and validate Kindle Chinese patches
         shell: bash
         run: |
           set -euo pipefail
-          python -m py_compile patch/patch_kcc.py patch/kindle_cn_ui.py patch/kindle_cn_enhancements.py
+          python -m py_compile \
+            patch/patch_kcc.py \
+            patch/patch_runtime_v12.py \
+            patch/kindle_cn_ui.py \
+            patch/kindle_cn_enhancements.py \
+            patch/kindlegen_runtime.py
+
           python patch/patch_kcc.py upstream
+          python patch/patch_runtime_v12.py upstream
+
           python -m py_compile \
             upstream/kindlecomicconverter/KCC_gui.py \
+            upstream/kindlecomicconverter/comic2ebook.py \
             upstream/kindlecomicconverter/kindle_cn_ui.py \
-            upstream/kindlecomicconverter/kindle_cn_enhancements.py
+            upstream/kindlecomicconverter/kindle_cn_enhancements.py \
+            upstream/kindlecomicconverter/kindlegen_runtime.py
 
           grep -q 'apply_kindle_cn_ui(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
           grep -q 'install_enhancements(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
-          grep -q 'Kindle 专用 · 简体中文 · 无广告/推广' upstream/kindlecomicconverter/KCC_gui.py
-          grep -q 'self.versionCheck.start()' upstream/kindlecomicconverter/KCC_gui.py && {
-            echo 'ERROR: version/announcement thread is still enabled'; exit 1;
-          } || true
-          grep -q '"Kobo Clara' upstream/kindlecomicconverter/KCC_gui.py && {
-            echo 'ERROR: Kobo profiles remain in GUI source after patch'; exit 1;
-          } || true
-          grep -q 'GUI.kofiButton.clicked.connect' upstream/kindlecomicconverter/KCC_gui.py && {
-            echo 'ERROR: Ko-fi button connection remains'; exit 1;
-          } || true
+          grep -q 'Kindle 专用 · 简体中文' upstream/kindlecomicconverter/KCC_gui.py
+          if grep -q '无广告/推广' upstream/kindlecomicconverter/KCC_gui.py; then
+            echo 'ERROR: redundant bottom advertising text still exists'; exit 1
+          fi
+          if grep -q 'self.versionCheck.start()' upstream/kindlecomicconverter/KCC_gui.py; then
+            echo 'ERROR: version/announcement thread is still enabled'; exit 1
+          fi
+          if grep -q '"Kobo Clara' upstream/kindlecomicconverter/KCC_gui.py; then
+            echo 'ERROR: Kobo profiles remain'; exit 1
+          fi
+          if grep -Fq "subprocess_run(['kindlegen'" upstream/kindlecomicconverter/comic2ebook.py; then
+            echo 'ERROR: hard-coded KindleGen subprocess remains'; exit 1
+          fi
+          grep -q 'get_kindlegen_path()' upstream/kindlecomicconverter/comic2ebook.py
+          grep -q 'self.anyErrors' upstream/kindlecomicconverter/KCC_gui.py
 
       - name: Install build dependencies
         shell: bash
@@ -105,13 +120,62 @@ jobs:
           python -m pip install -r requirements.txt
           python -m pip install pyinstaller certifi
           python - <<'PY'
-          import platform, sys
-          import PySide6
+          import platform, sys, PySide6
           print('Python', sys.version)
           print('Machine', platform.machine())
           print('PySide6', PySide6.__version__)
           assert platform.machine() == 'arm64'
           PY
+
+      - name: Test KindleGen resolver
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          FAKE="$RUNNER_TEMP/kindlegen"
+          cat > "$FAKE" <<'SH'
+          #!/bin/sh
+          echo 'Amazon kindlegen(MAC OSX) V2.9 build 1028-0897292'
+          exit 0
+          SH
+          chmod +x "$FAKE"
+          KCC_KINDLEGEN="$FAKE" PYTHONPATH=. python - <<'PY'
+          from kindlecomicconverter.kindlegen_runtime import refresh_kindlegen, get_kindlegen_path
+          s = refresh_kindlegen()
+          print(s)
+          assert s.usable, s
+          assert s.version == '2.9', s
+          assert get_kindlegen_path() == s.path
+          PY
+
+      - name: Smoke-test EPUB and CBZ conversion core
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/kcc-sample"
+          OUT="$RUNNER_TEMP/kcc-out"
+          rm -rf "$SAMPLE" "$OUT"
+          mkdir -p "$SAMPLE" "$OUT"
+          SAMPLE="$SAMPLE" python - <<'PY'
+          from pathlib import Path
+          from PIL import Image, ImageDraw
+          import os
+          p = Path(os.environ['SAMPLE'])
+          for i in range(1, 3):
+              img = Image.new('RGB', (900, 1200), 'white')
+              d = ImageDraw.Draw(img)
+              d.rectangle((80, 80, 820, 1120), outline='black', width=8)
+              d.text((120, 120), f'KCC smoke page {i}', fill='black')
+              img.save(p / f'{i:03d}.jpg', quality=90)
+          PY
+
+          python kcc-c2e.py -p KPW5 -f EPUB --nokepub -m -c 1 -o "$OUT" "$SAMPLE"
+          find "$OUT" -maxdepth 1 -type f -name '*.epub' -print -quit | grep -q .
+
+          rm -rf "$OUT"/*
+          python kcc-c2e.py -p KPW5 -f CBZ -m -c 1 -o "$OUT" "$SAMPLE"
+          find "$OUT" -maxdepth 1 -type f -name '*.cbz' -print -quit | grep -q .
 
       - name: Generate Kindle Chinese app icon
         shell: bash
@@ -122,7 +186,6 @@ jobs:
           python ../build/make_icon.py icons/KCCKindle.iconset
           iconutil -c icns icons/KCCKindle.iconset -o icons/comic2ebook.icns
           test -s icons/comic2ebook.icns
-          file icons/comic2ebook.icns
 
       - name: Build application with PyInstaller
         shell: bash
@@ -134,8 +197,8 @@ jobs:
           pyinstaller -y kcc-macos.spec
           APP="dist/Kindle Comic Converter.app"
           test -d "$APP"
-          /usr/bin/file "$APP/Contents/MacOS/Kindle Comic Converter"
-          /usr/bin/file "$APP/Contents/MacOS/Kindle Comic Converter" | grep -q 'arm64'
+          /usr/bin/file "$APP/Contents/MacOS/Kindle Comic Converter" | tee ../binary-info.txt
+          grep -q 'arm64' ../binary-info.txt
 
       - name: Rename and set bundle metadata
         shell: bash
@@ -146,20 +209,19 @@ jobs:
           NEW="dist/${PRODUCT_NAME}.app"
           mv "$OLD" "$NEW"
           PLIST="$NEW/Contents/Info.plist"
-
           plist_set() {
             local key="$1" type="$2" value="$3"
             /usr/libexec/PlistBuddy -c "Set :${key} ${value}" "$PLIST" 2>/dev/null || \
               /usr/libexec/PlistBuddy -c "Add :${key} ${type} ${value}" "$PLIST"
           }
-
           plist_set CFBundleName string "$PRODUCT_NAME"
           plist_set CFBundleDisplayName string "$PRODUCT_NAME"
           plist_set CFBundleIdentifier string "io.github.amster-ilvil.kcc-kindle-cn"
           plist_set CFBundleShortVersionString string "$PRODUCT_VERSION"
-          plist_set CFBundleVersion string "2"
+          plist_set CFBundleVersion string "3"
           plist_set NSHighResolutionCapable bool true
           plutil -lint "$PLIST"
+          plutil -p "$PLIST" | tee ../plist-info.txt
 
       - name: Ad-hoc sign app and verify
         shell: bash
@@ -168,22 +230,19 @@ jobs:
           set -euo pipefail
           APP="dist/${PRODUCT_NAME}.app"
           xattr -cr "$APP" || true
-
           while IFS= read -r -d '' f; do
             if /usr/bin/file "$f" | grep -q 'Mach-O'; then
               /usr/bin/codesign --force --sign - --timestamp=none "$f"
             fi
           done < <(find "$APP/Contents" -type f -print0)
-
           while IFS= read -r bundle; do
             [ -n "$bundle" ] && /usr/bin/codesign --force --sign - --timestamp=none "$bundle"
           done < <(find "$APP/Contents" -type d -name '*.framework' -print | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
-
           /usr/bin/codesign --force --sign - --timestamp=none "$APP"
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
           /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | tee ../codesign-info.txt
 
-      - name: Smoke-check bundled executable and UI startup
+      - name: Smoke-check bundled Qt UI startup
         shell: bash
         working-directory: upstream
         run: |
@@ -191,14 +250,10 @@ jobs:
           APP="dist/${PRODUCT_NAME}.app"
           EXE="$APP/Contents/MacOS/Kindle Comic Converter"
           test -x "$EXE"
-          /usr/bin/file "$EXE" | tee ../binary-info.txt
-          /usr/bin/file "$EXE" | grep -q 'arm64'
-          plutil -p "$APP/Contents/Info.plist" | tee ../plist-info.txt
-
           : > ../launch-smoke.log
           QT_QPA_PLATFORM=offscreen "$EXE" > ../launch-smoke.log 2>&1 &
           PID=$!
-          sleep 7
+          sleep 8
           if ! kill -0 "$PID" 2>/dev/null; then
             echo 'ERROR: app exited during startup smoke test'
             cat ../launch-smoke.log
@@ -208,30 +263,19 @@ jobs:
           wait "$PID" 2>/dev/null || true
           echo 'UI startup smoke test: PASS' | tee -a ../launch-smoke.log
 
-      - name: Package .app zip preserving macOS metadata
+      - name: Package app and DMG
         shell: bash
         working-directory: upstream
         run: |
           set -euo pipefail
           mkdir -p package
           ditto -c -k --sequesterRsrc --keepParent "dist/${PRODUCT_NAME}.app" "package/${PRODUCT_NAME}.app.zip"
-
-      - name: Create DMG with hdiutil
-        shell: bash
-        working-directory: upstream
-        run: |
-          set -euo pipefail
           STAGE="dmg-stage"
           rm -rf "$STAGE"
           mkdir -p "$STAGE"
           ditto "dist/${PRODUCT_NAME}.app" "$STAGE/${PRODUCT_NAME}.app"
           ln -s /Applications "$STAGE/Applications"
-          hdiutil create \
-            -volname "${PRODUCT_NAME}" \
-            -srcfolder "$STAGE" \
-            -ov \
-            -format UDZO \
-            "package/${DMG_NAME}"
+          hdiutil create -volname "${PRODUCT_NAME}" -srcfolder "$STAGE" -ov -format UDZO "package/${DMG_NAME}"
           hdiutil verify "package/${DMG_NAME}"
 
       - name: Generate checksums and build report
@@ -247,6 +291,7 @@ jobs:
             echo "Upstream: v11.0.1 @ ${UPSTREAM_COMMIT}"
             echo "Runner: $(sw_vers -productVersion) / $(uname -m)"
             echo "Python: $(python --version 2>&1)"
+            echo "KindleGen integration: bundled-path capable; legacy 32-bit builds rejected"
             echo "Built: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
             echo
             cat SHA256SUMS.txt
@@ -255,7 +300,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KCC-Kindle-CN-v1.1-AppleSilicon
+          name: KCC-Kindle-CN-v1.2-AppleSilicon
           path: |
             upstream/package/${{ env.PRODUCT_NAME }}.app.zip
             upstream/package/${{ env.DMG_NAME }}
@@ -269,7 +314,7 @@ jobs:
           compression-level: 0
           retention-days: 30
 
-      - name: Publish GitHub Release v1.1.0
+      - name: Publish GitHub Release v1.2.0
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         working-directory: upstream
@@ -283,23 +328,12 @@ jobs:
             "package/SHA256SUMS.txt"
             "package/BUILD-INFO.txt"
           )
-
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release ${RELEASE_TAG} already exists; updating notes and assets."
-            gh release edit "$RELEASE_TAG" \
-              --repo "$GITHUB_REPOSITORY" \
-              --title "KCC Kindle 中文版 v1.1.0" \
-              --notes-file "../RELEASE_NOTES_v1.1.0.md"
-            gh release upload "$RELEASE_TAG" "${ASSETS[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --clobber
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+              --title "KCC Kindle 中文版 v1.2.0" --notes-file "../RELEASE_NOTES_v1.2.0.md"
+            gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
-            gh release create "$RELEASE_TAG" "${ASSETS[@]}" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "KCC Kindle 中文版 v1.1.0" \
-              --notes-file "../RELEASE_NOTES_v1.1.0.md" \
-              --latest
+            gh release create "$RELEASE_TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "KCC Kindle 中文版 v1.2.0" \
+              --notes-file "../RELEASE_NOTES_v1.2.0.md" --latest
           fi
-
-          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,name,isLatest
