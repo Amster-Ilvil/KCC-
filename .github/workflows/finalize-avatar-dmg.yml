@@ -1,0 +1,208 @@
+name: Finalize project avatar and DMG icon
+
+on:
+  workflow_run:
+    workflows: ["Build macOS Apple Silicon"]
+    types: [completed]
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: kcc-kindle-cn-avatar-dmg-main
+  cancel-in-progress: true
+
+jobs:
+  finalize:
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main'
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      PRODUCT_NAME: Kindle漫画转换器
+      RELEASE_TAG: v1.3.0
+      DMG_NAME: KCC_11.0.1_Kindle_CN_v1.3_AppleSilicon.dmg
+      ARTIFACT_NAME: KCC-Kindle-CN-v1.3-AppleSilicon
+
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 1
+
+      - name: Materialize visible project avatar
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import base64
+          src = Path('assets/project_avatar.webp.b64')
+          dst = Path('assets/project_avatar.webp')
+          raw = base64.b64decode(''.join(src.read_text(encoding='utf-8').split()))
+          if not raw.startswith(b'RIFF') or raw[8:12] != b'WEBP':
+              raise SystemExit('avatar source is not a valid WebP payload')
+          dst.write_bytes(raw)
+          print(f'project avatar: {dst} ({len(raw)} bytes)')
+          PY
+          file assets/project_avatar.webp
+          test -s assets/project_avatar.webp
+
+      - name: Commit visible avatar asset when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          git add assets/project_avatar.webp
+          if git diff --cached --quiet; then
+            echo 'Visible avatar already matches source.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m '同步可预览项目头像资源'
+          git push origin HEAD:main
+
+      - name: Download successful signed build artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/artifact"
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$ARTIFACT_NAME" \
+            --dir "$RUNNER_TEMP/artifact"
+          find "$RUNNER_TEMP/artifact" -maxdepth 4 -type f -print
+
+      - name: Extract and verify signed App avatar
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP_ZIP="$(find "$RUNNER_TEMP/artifact" -type f -name "${PRODUCT_NAME}.app.zip" -print -quit)"
+          test -n "$APP_ZIP" && test -s "$APP_ZIP"
+
+          rm -rf "$RUNNER_TEMP/app-extract"
+          mkdir -p "$RUNNER_TEMP/app-extract"
+          ditto -x -k "$APP_ZIP" "$RUNNER_TEMP/app-extract"
+          APP="$RUNNER_TEMP/app-extract/${PRODUCT_NAME}.app"
+          ICON="$APP/Contents/Resources/comic2ebook.icns"
+
+          test -d "$APP"
+          test -s "$ICON"
+          file "$ICON"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/bin/codesign --verify --strict --verbose=2 \
+            "$APP/Contents/Resources/tools/kindlegen"
+
+          printf '%s\n' "$APP" > "$RUNNER_TEMP/app-path.txt"
+
+      - name: Build DMG with matching volume avatar
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(cat "$RUNNER_TEMP/app-path.txt")"
+          ICON="$APP/Contents/Resources/comic2ebook.icns"
+          STAGE="$RUNNER_TEMP/dmg-stage"
+          RW_DMG="$RUNNER_TEMP/kcc-avatar-rw.dmg"
+          FINAL_DMG="$RUNNER_TEMP/${DMG_NAME}"
+          MOUNT="$RUNNER_TEMP/kcc-avatar-mount"
+
+          rm -rf "$STAGE" "$MOUNT" "$RW_DMG" "$FINAL_DMG"
+          mkdir -p "$STAGE" "$MOUNT"
+          ditto "$APP" "$STAGE/${PRODUCT_NAME}.app"
+          ln -s /Applications "$STAGE/Applications"
+          cp "$ICON" "$STAGE/.VolumeIcon.icns"
+
+          # Build a writable image first, set Finder's custom-volume-icon flag on
+          # the mounted root, then convert to the final compressed read-only DMG.
+          hdiutil create \
+            -volname "$PRODUCT_NAME" \
+            -srcfolder "$STAGE" \
+            -ov \
+            -format UDRW \
+            "$RW_DMG"
+
+          hdiutil attach -readwrite -nobrowse -mountpoint "$MOUNT" "$RW_DMG"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
+
+          cp "$ICON" "$MOUNT/.VolumeIcon.icns"
+          if command -v SetFile >/dev/null 2>&1; then
+            SetFile -a C "$MOUNT"
+          elif [ -x /usr/bin/SetFile ]; then
+            /usr/bin/SetFile -a C "$MOUNT"
+          fi
+          sync
+          test -s "$MOUNT/.VolumeIcon.icns"
+          cmp "$ICON" "$MOUNT/.VolumeIcon.icns"
+
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+          hdiutil convert "$RW_DMG" -format UDZO -o "$FINAL_DMG"
+          hdiutil verify "$FINAL_DMG"
+          test -s "$FINAL_DMG"
+
+      - name: Mount final DMG and verify both icons
+        shell: bash
+        run: |
+          set -euo pipefail
+          FINAL_DMG="$RUNNER_TEMP/${DMG_NAME}"
+          MOUNT="$RUNNER_TEMP/kcc-avatar-final-check"
+          rm -rf "$MOUNT"
+          mkdir -p "$MOUNT"
+
+          hdiutil attach -readonly -nobrowse -mountpoint "$MOUNT" "$FINAL_DMG"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
+
+          VOLUME_ICON="$MOUNT/.VolumeIcon.icns"
+          APP_ICON="$MOUNT/${PRODUCT_NAME}.app/Contents/Resources/comic2ebook.icns"
+          test -s "$VOLUME_ICON"
+          test -s "$APP_ICON"
+          cmp "$VOLUME_ICON" "$APP_ICON"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 \
+            "$MOUNT/${PRODUCT_NAME}.app"
+
+          echo 'DMG avatar verification: PASS (volume icon == App icon)'
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+
+      - name: Generate final avatar build checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          FINAL_DMG="$RUNNER_TEMP/${DMG_NAME}"
+          shasum -a 256 "$FINAL_DMG" | tee "$RUNNER_TEMP/DMG-AVATAR-SHA256.txt"
+          shasum -a 256 assets/project_avatar.webp | tee "$RUNNER_TEMP/PROJECT-AVATAR-SHA256.txt"
+
+      - name: Replace Release DMG and add project avatar
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/${DMG_NAME}" \
+            assets/project_avatar.webp \
+            "$RUNNER_TEMP/DMG-AVATAR-SHA256.txt" \
+            "$RUNNER_TEMP/PROJECT-AVATAR-SHA256.txt" \
+            --repo "$GITHUB_REPOSITORY" \
+            --clobber
+
+      - name: Upload finalized DMG artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KCC-Kindle-CN-v1.3-Avatar-DMG
+          path: |
+            ${{ runner.temp }}/${{ env.DMG_NAME }}
+            ${{ runner.temp }}/DMG-AVATAR-SHA256.txt
+            ${{ runner.temp }}/PROJECT-AVATAR-SHA256.txt
+            assets/project_avatar.webp
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
