@@ -9,7 +9,7 @@ on:
       - 'build/**'
       - '.github/workflows/build-macos-arm64.yml'
       - 'README.md'
-      - 'RELEASE_NOTES_v1.2.0.md'
+      - 'RELEASE_NOTES_v1.3.0.md'
   pull_request:
     branches: [ main ]
     paths:
@@ -17,7 +17,7 @@ on:
       - 'build/**'
       - '.github/workflows/build-macos-arm64.yml'
       - 'README.md'
-      - 'RELEASE_NOTES_v1.2.0.md'
+      - 'RELEASE_NOTES_v1.3.0.md'
 
 permissions:
   contents: write
@@ -32,15 +32,18 @@ env:
   UPSTREAM_COMMIT: bd0328a12fe40ab62285d3a8ae3e501f6e41c78b
   PYTHON_VERSION: '3.11'
   PRODUCT_NAME: Kindle漫画转换器
-  PRODUCT_VERSION: '1.2.0'
-  RELEASE_TAG: v1.2.0
-  DMG_NAME: KCC_11.0.1_Kindle_CN_v1.2_AppleSilicon.dmg
+  PRODUCT_VERSION: '1.3.0'
+  RELEASE_TAG: v1.3.0
+  DMG_NAME: KCC_11.0.1_Kindle_CN_v1.3_AppleSilicon.dmg
+  KINDLING_REPO: ciscoriordan/kindling
+  KINDLING_TAG: v0.31.0
+  KINDLING_ASSET: kindling-cli-mac-apple-silicon
 
 jobs:
   build:
-    name: Build + test arm64 app/dmg
+    name: Build + test arm64 self-contained app/dmg
     runs-on: macos-15
-    timeout-minutes: 50
+    timeout-minutes: 55
 
     steps:
       - name: Checkout customization repo
@@ -69,7 +72,7 @@ jobs:
           git fetch --depth=1 origin "$UPSTREAM_REF"
           git checkout --detach FETCH_HEAD
           ACTUAL="$(git rev-parse HEAD)"
-          echo "Official commit: $ACTUAL"
+          echo "Official KCC commit: $ACTUAL"
           test "$ACTUAL" = "$UPSTREAM_COMMIT"
 
       - name: Apply and validate Kindle Chinese patches
@@ -96,6 +99,7 @@ jobs:
           grep -q 'apply_kindle_cn_ui(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
           grep -q 'install_enhancements(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
           grep -q 'Kindle 专用 · 简体中文' upstream/kindlecomicconverter/KCC_gui.py
+          grep -q "status.engine == 'kindlegen'" upstream/kindlecomicconverter/KCC_gui.py
           if grep -q '无广告/推广' upstream/kindlecomicconverter/KCC_gui.py; then
             echo 'ERROR: redundant bottom advertising text still exists'; exit 1
           fi
@@ -127,26 +131,76 @@ jobs:
           assert platform.machine() == 'arm64'
           PY
 
-      - name: Test KindleGen resolver
+      - name: Download and verify Kindling Apple Silicon
+        shell: bash
+        working-directory: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p tools licenses "$RUNNER_TEMP/kindling-release"
+
+          gh release download "$KINDLING_TAG" \
+            --repo "$KINDLING_REPO" \
+            --pattern "$KINDLING_ASSET" \
+            --dir "$RUNNER_TEMP/kindling-release"
+
+          cp "$RUNNER_TEMP/kindling-release/$KINDLING_ASSET" tools/kindlegen
+          chmod 755 tools/kindlegen
+
+          /usr/bin/file tools/kindlegen | tee ../kindling-binary-info.txt
+          grep -q 'arm64' ../kindling-binary-info.txt
+          tools/kindlegen --version | tee ../kindling-version.txt
+          grep -qi 'kindling' ../kindling-version.txt
+          grep -q '0.31.0' ../kindling-version.txt
+
+          ACTUAL_SHA="$(shasum -a 256 tools/kindlegen | awk '{print $1}')"
+          RELEASE_DIGEST="$(gh api "repos/${KINDLING_REPO}/releases/tags/${KINDLING_TAG}" \
+            --jq '.assets[] | select(.name == env.KINDLING_ASSET) | .digest' | head -n 1)"
+          echo "Kindling asset digest from GitHub: $RELEASE_DIGEST"
+          echo "Kindling downloaded sha256: sha256:$ACTUAL_SHA"
+          if [[ "$RELEASE_DIGEST" == sha256:* ]]; then
+            test "sha256:$ACTUAL_SHA" = "$RELEASE_DIGEST"
+          else
+            echo 'ERROR: GitHub release asset did not expose a SHA-256 digest'
+            exit 1
+          fi
+          printf '%s\n' "$RELEASE_DIGEST" > ../kindling-release-digest.txt
+
+          curl -fsSL \
+            "https://raw.githubusercontent.com/${KINDLING_REPO}/${KINDLING_TAG}/LICENSE" \
+            -o licenses/KINDLING-LICENSE.txt
+          test -s licenses/KINDLING-LICENSE.txt
+
+      - name: Test Kindling resolver and compatibility CLI
         shell: bash
         working-directory: upstream
         run: |
           set -euo pipefail
-          FAKE="$RUNNER_TEMP/kindlegen"
-          cat > "$FAKE" <<'SH'
-          #!/bin/sh
-          echo 'Amazon kindlegen(MAC OSX) V2.9 build 1028-0897292'
-          exit 0
-          SH
-          chmod +x "$FAKE"
-          KCC_KINDLEGEN="$FAKE" PYTHONPATH=. python - <<'PY'
-          from kindlecomicconverter.kindlegen_runtime import refresh_kindlegen, get_kindlegen_path
+          KCC_KINDLEGEN="$PWD/tools/kindlegen" PYTHONPATH=. python - <<'PY'
+          from kindlecomicconverter.kindlegen_runtime import refresh_kindlegen, get_kindlegen_path, diagnostic_text
           s = refresh_kindlegen()
           print(s)
+          print(diagnostic_text(s))
           assert s.usable, s
-          assert s.version == '2.9', s
+          assert s.engine == 'kindling', s
+          assert s.version == '0.31.0', s
+          assert 'arm64' in s.architecture, s
           assert get_kindlegen_path() == s.path
           PY
+
+          # Ensure the exact historical flags KCC uses are accepted.
+          set +e
+          tools/kindlegen -locale en > "$RUNNER_TEMP/kindling-locale-probe.txt" 2>&1
+          RC=$?
+          set -e
+          cat "$RUNNER_TEMP/kindling-locale-probe.txt"
+          # A no-input probe may be non-zero; it must not fail with an unknown-option error.
+          if grep -Eqi 'unexpected argument.*locale|unknown option.*locale' "$RUNNER_TEMP/kindling-locale-probe.txt"; then
+            echo 'ERROR: Kindling no longer accepts KindleGen -locale compatibility flag'
+            exit 1
+          fi
+          echo "Kindling -locale probe exit code: $RC"
 
       - name: Smoke-test EPUB and CBZ conversion core
         shell: bash
@@ -166,7 +220,7 @@ jobs:
               img = Image.new('RGB', (900, 1200), 'white')
               d = ImageDraw.Draw(img)
               d.rectangle((80, 80, 820, 1120), outline='black', width=8)
-              d.text((120, 120), f'KCC smoke page {i}', fill='black')
+              d.text((120, 120), f'KCC v1.3 smoke page {i}', fill='black')
               img.save(p / f'{i:03d}.jpg', quality=90)
           PY
 
@@ -176,6 +230,32 @@ jobs:
           rm -rf "$OUT"/*
           python kcc-c2e.py -p KPW5 -f CBZ -m -c 1 -o "$OUT" "$SAMPLE"
           find "$OUT" -maxdepth 1 -type f -name '*.cbz' -print -quit | grep -q .
+
+      - name: Smoke-test real MOBI/AZW3 conversion through KCC
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          SAMPLE="$RUNNER_TEMP/kcc-sample"
+          OUT="$RUNNER_TEMP/kcc-mobi-out"
+          rm -rf "$OUT"
+          mkdir -p "$OUT"
+
+          KCC_KINDLEGEN="$PWD/tools/kindlegen" \
+            python kcc-c2e.py -p KPW5 -f MOBI -m -c 1 -o "$OUT" "$SAMPLE" \
+            2>&1 | tee ../mobi-smoke.log
+
+          MOBI="$(find "$OUT" -maxdepth 1 -type f -name '*.mobi' -print -quit)"
+          test -n "$MOBI"
+          test -s "$MOBI"
+          echo "Generated MOBI: $MOBI"
+          /usr/bin/file "$MOBI" | tee -a ../mobi-smoke.log
+
+          # Kindling can parse its own generated Kindle container; this catches
+          # truncated or structurally invalid output before packaging the app.
+          tools/kindlegen dump "$MOBI" > ../mobi-dump.txt
+          grep -Eq 'MOBI|PalmDB|mobi' ../mobi-dump.txt
+          grep -q ':I1036:' ../mobi-smoke.log
 
       - name: Generate Kindle Chinese app icon
         shell: bash
@@ -200,7 +280,7 @@ jobs:
           /usr/bin/file "$APP/Contents/MacOS/Kindle Comic Converter" | tee ../binary-info.txt
           grep -q 'arm64' ../binary-info.txt
 
-      - name: Rename and set bundle metadata
+      - name: Rename app, set metadata, and embed Kindling
         shell: bash
         working-directory: upstream
         run: |
@@ -209,6 +289,7 @@ jobs:
           NEW="dist/${PRODUCT_NAME}.app"
           mv "$OLD" "$NEW"
           PLIST="$NEW/Contents/Info.plist"
+
           plist_set() {
             local key="$1" type="$2" value="$3"
             /usr/libexec/PlistBuddy -c "Set :${key} ${value}" "$PLIST" 2>/dev/null || \
@@ -218,10 +299,21 @@ jobs:
           plist_set CFBundleDisplayName string "$PRODUCT_NAME"
           plist_set CFBundleIdentifier string "io.github.amster-ilvil.kcc-kindle-cn"
           plist_set CFBundleShortVersionString string "$PRODUCT_VERSION"
-          plist_set CFBundleVersion string "3"
+          plist_set CFBundleVersion string "4"
           plist_set NSHighResolutionCapable bool true
           plutil -lint "$PLIST"
           plutil -p "$PLIST" | tee ../plist-info.txt
+
+          mkdir -p "$NEW/Contents/Resources/tools" "$NEW/Contents/Resources/licenses"
+          cp tools/kindlegen "$NEW/Contents/Resources/tools/kindlegen"
+          cp licenses/KINDLING-LICENSE.txt "$NEW/Contents/Resources/licenses/KINDLING-LICENSE.txt"
+          chmod 755 "$NEW/Contents/Resources/tools/kindlegen"
+
+          /usr/bin/file "$NEW/Contents/Resources/tools/kindlegen" | tee ../bundled-kindling-info.txt
+          grep -q 'arm64' ../bundled-kindling-info.txt
+          "$NEW/Contents/Resources/tools/kindlegen" --version | tee -a ../bundled-kindling-info.txt
+          grep -q '0.31.0' ../bundled-kindling-info.txt
+          test -s "$NEW/Contents/Resources/licenses/KINDLING-LICENSE.txt"
 
       - name: Ad-hoc sign app and verify
         shell: bash
@@ -230,16 +322,20 @@ jobs:
           set -euo pipefail
           APP="dist/${PRODUCT_NAME}.app"
           xattr -cr "$APP" || true
+
           while IFS= read -r -d '' f; do
             if /usr/bin/file "$f" | grep -q 'Mach-O'; then
               /usr/bin/codesign --force --sign - --timestamp=none "$f"
             fi
           done < <(find "$APP/Contents" -type f -print0)
+
           while IFS= read -r bundle; do
             [ -n "$bundle" ] && /usr/bin/codesign --force --sign - --timestamp=none "$bundle"
           done < <(find "$APP/Contents" -type d -name '*.framework' -print | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
+
           /usr/bin/codesign --force --sign - --timestamp=none "$APP"
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/bin/codesign --verify --strict --verbose=2 "$APP/Contents/Resources/tools/kindlegen"
           /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | tee ../codesign-info.txt
 
       - name: Smoke-check bundled Qt UI startup
@@ -250,6 +346,7 @@ jobs:
           APP="dist/${PRODUCT_NAME}.app"
           EXE="$APP/Contents/MacOS/Kindle Comic Converter"
           test -x "$EXE"
+          test -x "$APP/Contents/Resources/tools/kindlegen"
           : > ../launch-smoke.log
           QT_QPA_PLATFORM=offscreen "$EXE" > ../launch-smoke.log 2>&1 &
           PID=$!
@@ -285,13 +382,16 @@ jobs:
           set -euo pipefail
           cd package
           shasum -a 256 "${PRODUCT_NAME}.app.zip" "${DMG_NAME}" > SHA256SUMS.txt
+          KINDLING_DIGEST="$(cat ../../kindling-release-digest.txt)"
           {
             echo "KCC Kindle 中文版 build report"
             echo "Product: ${PRODUCT_VERSION}"
-            echo "Upstream: v11.0.1 @ ${UPSTREAM_COMMIT}"
+            echo "Upstream KCC: v11.0.1 @ ${UPSTREAM_COMMIT}"
+            echo "Bundled MOBI engine: Kindling ${KINDLING_TAG} / Apple Silicon arm64"
+            echo "Kindling asset digest: ${KINDLING_DIGEST}"
             echo "Runner: $(sw_vers -productVersion) / $(uname -m)"
             echo "Python: $(python --version 2>&1)"
-            echo "KindleGen integration: bundled-path capable; legacy 32-bit builds rejected"
+            echo "Tests: resolver PASS; EPUB PASS; CBZ PASS; MOBI/AZW3 PASS; Qt startup PASS"
             echo "Built: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
             echo
             cat SHA256SUMS.txt
@@ -300,7 +400,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KCC-Kindle-CN-v1.2-AppleSilicon
+          name: KCC-Kindle-CN-v1.3-AppleSilicon
           path: |
             upstream/package/${{ env.PRODUCT_NAME }}.app.zip
             upstream/package/${{ env.DMG_NAME }}
@@ -309,12 +409,18 @@ jobs:
             codesign-info.txt
             binary-info.txt
             plist-info.txt
+            kindling-binary-info.txt
+            kindling-version.txt
+            kindling-release-digest.txt
+            bundled-kindling-info.txt
+            mobi-smoke.log
+            mobi-dump.txt
             launch-smoke.log
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
 
-      - name: Publish GitHub Release v1.2.0
+      - name: Publish GitHub Release v1.3.0
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         shell: bash
         working-directory: upstream
@@ -330,10 +436,10 @@ jobs:
           )
           if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
-              --title "KCC Kindle 中文版 v1.2.0" --notes-file "../RELEASE_NOTES_v1.2.0.md"
+              --title "KCC Kindle 中文版 v1.3.0" --notes-file "../RELEASE_NOTES_v1.3.0.md"
             gh release upload "$RELEASE_TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" --clobber
           else
             gh release create "$RELEASE_TAG" "${ASSETS[@]}" --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" --title "KCC Kindle 中文版 v1.2.0" \
-              --notes-file "../RELEASE_NOTES_v1.2.0.md" --latest
+              --target "$GITHUB_SHA" --title "KCC Kindle 中文版 v1.3.0" \
+              --notes-file "../RELEASE_NOTES_v1.3.0.md" --latest
           fi
