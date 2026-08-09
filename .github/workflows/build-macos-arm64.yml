@@ -9,12 +9,19 @@ on:
       - 'build/**'
       - '.github/workflows/build-macos-arm64.yml'
       - 'README.md'
+  pull_request:
+    branches: [ main ]
+    paths:
+      - 'patch/**'
+      - 'build/**'
+      - '.github/workflows/build-macos-arm64.yml'
+      - 'README.md'
 
 permissions:
   contents: read
 
 concurrency:
-  group: kcc-kindle-cn-macos-arm64
+  group: kcc-kindle-cn-macos-arm64-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -69,7 +76,6 @@ jobs:
           python patch/patch_kcc.py upstream
           python -m py_compile upstream/kindlecomicconverter/KCC_gui.py upstream/kindlecomicconverter/kindle_cn_ui.py
 
-          # Guardrails: required customizations must be present and unwanted product surfaces absent.
           grep -q 'apply_kindle_cn_ui(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
           grep -q 'Kindle 专用 · 简体中文 · 无广告/推广' upstream/kindlecomicconverter/KCC_gui.py
           grep -q 'self.versionCheck.start()' upstream/kindlecomicconverter/KCC_gui.py && {
@@ -144,14 +150,12 @@ jobs:
           APP="dist/${PRODUCT_NAME}.app"
           xattr -cr "$APP" || true
 
-          # Sign nested Mach-O binaries first. Avoid using --deep as the signing strategy.
           while IFS= read -r -d '' f; do
             if /usr/bin/file "$f" | grep -q 'Mach-O'; then
               /usr/bin/codesign --force --sign - --timestamp=none "$f"
             fi
           done < <(find "$APP/Contents" -type f -print0)
 
-          # Framework bundles must be signed after their contents.
           while IFS= read -r bundle; do
             [ -n "$bundle" ] && /usr/bin/codesign --force --sign - --timestamp=none "$bundle"
           done < <(find "$APP/Contents" -type d -name '*.framework' -print | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
