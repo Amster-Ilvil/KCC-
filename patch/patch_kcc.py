@@ -18,7 +18,14 @@ def patch_gui(path: Path):
     if "apply_kindle_cn_ui" in text:
         print("[跳过] KCC_gui.py 已修改"); return
     shutil.copy2(path, path.with_suffix(path.suffix+".official.bak"))
-    text=one(text,"from . import KCC_ui_editor\n","from . import KCC_ui_editor\nfrom .kindle_cn_ui import apply_kindle_cn_ui, apply_meta_editor_cn, translate_runtime_message\n","导入中文 UI")
+    text=one(
+        text,
+        "from . import KCC_ui_editor\n",
+        "from . import KCC_ui_editor\n"
+        "from .kindle_cn_ui import apply_kindle_cn_ui, apply_meta_editor_cn, translate_runtime_message\n"
+        "from .kindle_cn_enhancements import install_enhancements, enhance_meta_editor, translate_more\n",
+        "导入中文 UI",
+    )
 
     # Disable upstream update/announcement/promotion networking entirely.
     p=re.compile(r"(class VersionThread\(QThread\):.*?\n    def run\(self\):\n)(.*?)(\n    def setAnswer\(self, dialoganswer\):)",re.S)
@@ -26,7 +33,12 @@ def patch_gui(path: Path):
     if not m: fail("无法定位 VersionThread.run")
     text=text[:m.start()]+m.group(1)+"        # Kindle 中文版：启动时不检查更新，不请求公告/推广。\n        return\n"+m.group(3)+text[m.end():]
 
-    text=one(text,"        self.setupUi(MW)\n        self.editor = KCCGUI_MetaEditor()\n","        self.setupUi(MW)\n        apply_kindle_cn_ui(self, MW)\n        self.editor = KCCGUI_MetaEditor()\n","主界面入口")
+    text=one(
+        text,
+        "        self.setupUi(MW)\n        self.editor = KCCGUI_MetaEditor()\n",
+        "        self.setupUi(MW)\n        apply_kindle_cn_ui(self, MW)\n        install_enhancements(self, MW)\n        self.editor = KCCGUI_MetaEditor()\n",
+        "主界面入口",
+    )
     text=one(text,"        self.settings = QSettings('ciromattia', 'kcc10')\n","        self.settings = QSettings('KCC-Kindle-CN', 'kcc11-kindle-only')\n","独立设置")
 
     # Kindle-focused output list. Indexes 0..3 remain compatible with upstream
@@ -128,8 +140,18 @@ def patch_gui(path: Path):
 
     # Translate the common runtime surfaces while keeping all internal keys,
     # command-line switches and metadata field names unchanged.
-    text=one(text,"    def addMessage(self, message, icon, replace=False):\n        if icon != '':\n","    def addMessage(self, message, icon, replace=False):\n        message = translate_runtime_message(message)\n        if icon != '':\n","消息翻译")
-    text=one(text,"    def showDialog(self, message, kind):\n        if kind == 'error':\n            QMessageBox.critical(MW, 'KCC - Error', message, QMessageBox.StandardButton.Ok)\n","    def showDialog(self, message, kind):\n        message = translate_runtime_message(message)\n        if kind == 'error':\n            QMessageBox.critical(MW, 'KCC - 错误', message, QMessageBox.StandardButton.Ok)\n","对话框翻译")
+    text=one(
+        text,
+        "    def addMessage(self, message, icon, replace=False):\n        if icon != '':\n",
+        "    def addMessage(self, message, icon, replace=False):\n        message = translate_runtime_message(message)\n        message = translate_more(message)\n        if icon != '':\n",
+        "消息翻译",
+    )
+    text=one(
+        text,
+        "    def showDialog(self, message, kind):\n        if kind == 'error':\n            QMessageBox.critical(MW, 'KCC - Error', message, QMessageBox.StandardButton.Ok)\n",
+        "    def showDialog(self, message, kind):\n        message = translate_runtime_message(message)\n        message = translate_more(message)\n        if kind == 'error':\n            QMessageBox.critical(MW, 'KCC - 错误', message, QMessageBox.StandardButton.Ok)\n",
+        "对话框翻译",
+    )
     text=text.replace("QMessageBox.question(MW, 'KCC - Question', message,","QMessageBox.question(MW, 'KCC - 确认', message,")
     text=text.replace("GUI.croppingPowerLabel.setText('Cropping Power: ' + str(value))","GUI.croppingPowerLabel.setText('裁边强度：' + str(value))")
     text=text.replace("GUI.gammaLabel.setText('Gamma: Auto')","GUI.gammaLabel.setText('Gamma：自动')")
@@ -137,7 +159,11 @@ def patch_gui(path: Path):
 
     hook="        self.setupUi(self.ui)\n        self.ui.setWindowFlags"
     if hook in text:
-        text=text.replace(hook,"        self.setupUi(self.ui)\n        apply_meta_editor_cn(self, self.ui)\n        self.ui.setWindowFlags",1)
+        text=text.replace(
+            hook,
+            "        self.setupUi(self.ui)\n        apply_meta_editor_cn(self, self.ui)\n        enhance_meta_editor(self, self.ui)\n        self.ui.setWindowFlags",
+            1,
+        )
     else:
         fail("无法定位元数据编辑器 setupUi")
 
@@ -155,9 +181,17 @@ def patch_setup(path: Path):
 def main():
     if len(sys.argv)!=2: fail("用法：patch_kcc.py /path/to/kcc-v11.0.1")
     root=Path(sys.argv[1]).expanduser().resolve(); gui=root/"kindlecomicconverter/KCC_gui.py"; setup=root/"setup.py"
-    src=Path(__file__).with_name("kindle_cn_ui.py"); dst=root/"kindlecomicconverter/kindle_cn_ui.py"
+    patch_dir=Path(__file__).parent
+    ui_src=patch_dir/"kindle_cn_ui.py"
+    enh_src=patch_dir/"kindle_cn_enhancements.py"
+    ui_dst=root/"kindlecomicconverter/kindle_cn_ui.py"
+    enh_dst=root/"kindlecomicconverter/kindle_cn_enhancements.py"
     if not gui.is_file() or not setup.is_file(): fail("目标不是完整 KCC v11.0.1 源码目录")
-    if not src.is_file(): fail("缺少 kindle_cn_ui.py")
-    shutil.copy2(src,dst); patch_gui(gui); patch_setup(setup)
+    if not ui_src.is_file(): fail("缺少 kindle_cn_ui.py")
+    if not enh_src.is_file(): fail("缺少 kindle_cn_enhancements.py")
+    shutil.copy2(ui_src,ui_dst)
+    shutil.copy2(enh_src,enh_dst)
+    patch_gui(gui)
+    patch_setup(setup)
     print("[完成] KCC 11.0.1 Kindle 中文专用补丁已应用")
 if __name__=="__main__": main()
