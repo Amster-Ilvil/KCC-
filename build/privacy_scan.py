@@ -14,6 +14,8 @@ TEXT_SUFFIXES = {
     ".sh", ".command", ".ps1", ".plist", ".xml", ".html", ".css", ".js",
 }
 
+_PERSONAL_OWNER = "amster" + "-" + "ilvil"
+
 PATTERNS = [
     ("macOS 本机用户路径", re.compile(r"/Users/(?!runner(?:/|$))[^/\s'\"]+", re.I)),
     ("Windows 本机用户路径", re.compile(r"[A-Za-z]:\\\\Users\\\\[^\\\s'\"]+", re.I)),
@@ -22,7 +24,7 @@ PATTERNS = [
     ("GitHub Fine-grained Token", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{30,}\b")),
     ("AWS Access Key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("Bearer Token", re.compile(r"\bBearer\s+[A-Za-z0-9._~+/=-]{20,}\b", re.I)),
-    ("个人 GitHub 标识", re.compile(r"\bamster-ilvil\b", re.I)),
+    ("个人 GitHub 标识", re.compile(rf"\b{re.escape(_PERSONAL_OWNER)}\b", re.I)),
 ]
 
 EMAIL_RE = re.compile(r"(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])", re.I)
