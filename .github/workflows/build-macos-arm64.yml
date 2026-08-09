@@ -9,6 +9,7 @@ on:
       - 'build/**'
       - '.github/workflows/build-macos-arm64.yml'
       - 'README.md'
+      - 'RELEASE_NOTES_v1.1.0.md'
   pull_request:
     branches: [ main ]
     paths:
@@ -16,9 +17,10 @@ on:
       - 'build/**'
       - '.github/workflows/build-macos-arm64.yml'
       - 'README.md'
+      - 'RELEASE_NOTES_v1.1.0.md'
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
   group: kcc-kindle-cn-macos-arm64-${{ github.ref }}
@@ -31,6 +33,7 @@ env:
   PYTHON_VERSION: '3.11'
   PRODUCT_NAME: Kindle漫画转换器
   PRODUCT_VERSION: '1.1.0'
+  RELEASE_TAG: v1.1.0
   DMG_NAME: KCC_11.0.1_Kindle_CN_v1.1_AppleSilicon.dmg
 
 jobs:
@@ -192,9 +195,6 @@ jobs:
           /usr/bin/file "$EXE" | grep -q 'arm64'
           plutil -p "$APP/Contents/Info.plist" | tee ../plist-info.txt
 
-          # Real startup smoke test: allow Qt to construct the entire redesigned
-          # UI offscreen. Import errors, missing plugins and most init crashes
-          # will terminate the process and fail this build.
           : > ../launch-smoke.log
           QT_QPA_PLATFORM=offscreen "$EXE" > ../launch-smoke.log 2>&1 &
           PID=$!
@@ -268,3 +268,38 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+      - name: Publish GitHub Release v1.1.0
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        shell: bash
+        working-directory: upstream
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          ASSETS=(
+            "package/${DMG_NAME}"
+            "package/${PRODUCT_NAME}.app.zip"
+            "package/SHA256SUMS.txt"
+            "package/BUILD-INFO.txt"
+          )
+
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release ${RELEASE_TAG} already exists; updating notes and assets."
+            gh release edit "$RELEASE_TAG" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "KCC Kindle 中文版 v1.1.0" \
+              --notes-file "../RELEASE_NOTES_v1.1.0.md"
+            gh release upload "$RELEASE_TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --clobber
+          else
+            gh release create "$RELEASE_TAG" "${ASSETS[@]}" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "KCC Kindle 中文版 v1.1.0" \
+              --notes-file "../RELEASE_NOTES_v1.1.0.md" \
+              --latest
+          fi
+
+          gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --json url,tagName,name,isLatest
