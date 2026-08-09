@@ -2,7 +2,7 @@
 """MOBI/AZW3 engine discovery for KCC Kindle CN.
 
 The KCC conversion core still speaks the historical kindlegen command line.
-This module resolves a compatible executable in a deterministic order.  It
+This module resolves a compatible executable in a deterministic order. It
 supports both Amazon KindleGen and Kindling's documented kindlegen-compat mode,
 and rejects legacy 32-bit Mach-O programs that modern macOS cannot execute.
 """
@@ -58,8 +58,6 @@ def candidate_paths() -> list[tuple[Path, str]]:
 
     contents = _app_contents()
     if contents is not None:
-        # v1.3 release places Kindling here under the historical executable
-        # name so the mature KCC MOBI worker can keep its proven CLI flow.
         candidates.extend([
             (contents / "Resources" / "tools" / "kindlegen", "App 内置 MOBI 引擎"),
             (contents / "Resources" / "kindlegen", "App 内置 MOBI 引擎"),
@@ -137,7 +135,6 @@ def _kindlegen_version(output: str) -> str:
 
 
 def _kindling_version(output: str) -> str:
-    # clap normally prints "kindling 0.31.0"; tolerate kindling-cli and v-prefix.
     match = re.search(r"\bkindling(?:-cli)?\b[^0-9]{0,16}v?([0-9]+(?:\.[0-9]+){1,3})", output, re.I)
     return match.group(1) if match else ""
 
@@ -175,8 +172,6 @@ def _probe(path: Path, source: str) -> KindleGenStatus:
                 reason="这是 32 位 i386/PowerPC KindleGen，现代 macOS 与 Apple Silicon 无法运行",
             )
 
-        # Kindling has a normal --version path. Probe it first so its own version
-        # is not confused with Amazon KindleGen's unrelated 2.9 numbering.
         version_probe = _run(path, ["--version"], timeout=8)
         version_output = version_probe.stdout or ""
         if "kindling" in version_output.lower():
@@ -200,9 +195,6 @@ def _probe(path: Path, source: str) -> KindleGenStatus:
                 engine="kindling",
             )
 
-        # Real KindleGen has no reliable --version switch. Its historical
-        # `-locale en` probe emits the Amazon kindlegen banner even if the
-        # process returns non-zero, which is why identity is based on output.
         legacy_probe = _run(path, ["-locale", "en"])
         legacy_output = legacy_probe.stdout or ""
         if "kindlegen" in legacy_output.lower() or "kindlegen" in version_output.lower():
@@ -278,6 +270,21 @@ def get_kindlegen_path() -> str:
     if status.usable and status.path:
         return status.path
     raise KindleGenUnavailable(status.reason or "未找到可运行的 MOBI/AZW3 引擎")
+
+
+def build_mobi_command(item: str) -> list[str]:
+    """Return the exact converter command for KCC's intermediate EPUB.
+
+    Amazon KindleGen accepts flags before the input file and KCC historically
+    invokes it that way. Kindling intentionally enters its KindleGen-compat
+    parser only when the EPUB/OPF is the first argument after the executable,
+    so its argument order must be different.
+    """
+    status = find_kindlegen()
+    path = get_kindlegen_path()
+    if status.engine == "kindling":
+        return [path, item, "-dont_append_source", "-locale", "en"]
+    return [path, "-dont_append_source", "-locale", "en", item]
 
 
 def diagnostic_text(status: KindleGenStatus | None = None) -> str:
