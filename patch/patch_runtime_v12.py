@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Post-patch hardening for KCC Kindle CN v1.2.
+"""Runtime hardening for KCC Kindle CN v1.3.
 
 Runs after patch_kcc.py against the pinned official KCC 11.0.1 source.
 """
@@ -31,18 +31,14 @@ def patch_gui(path: Path):
             "from .kindle_cn_enhancements import install_enhancements, enhance_meta_editor, translate_more\n",
             "from .kindle_cn_enhancements import install_enhancements, enhance_meta_editor, translate_more\n"
             "from .kindlegen_runtime import refresh_kindlegen, diagnostic_text\n",
-            "加入 KindleGen 运行时检测",
+            "加入 MOBI/AZW3 引擎运行时检测",
         )
 
-    # User-facing cleanup: retain the useful identity text, remove the redundant
-    # advertising claim from the bottom status bar.
     text = text.replace(
         'statusBarLabel = QLabel("Kindle 专用 · 简体中文 · 无广告/推广")',
         'statusBarLabel = QLabel("Kindle 专用 · 简体中文")',
     )
 
-    # Replace upstream PATH-only KindleGen detection. Missing KindleGen is an
-    # optional-feature state, not a startup-fatal dialog.
     pattern = re.compile(
         r"    def detectKindleGen\(self, startup=False\):\n.*?\n    def __init__\(self, kccapp, kccwindow\):",
         re.S,
@@ -51,14 +47,14 @@ def patch_gui(path: Path):
         status = refresh_kindlegen()
         self.kindleGen = status.usable
         self.kindleGenPath = status.path if status.usable else ''
-        if status.usable and status.version:
+        # Amazon KindleGen and Kindling use unrelated version schemes. Only
+        # apply the historical 2.9 minimum to a real Amazon KindleGen binary.
+        if status.usable and status.engine == 'kindlegen' and status.version:
             try:
                 if Version(status.version) < Version('2.9'):
                     self.addMessage('KindleGen 版本较旧，MOBI/AZW3 转换可能失败。', 'warning')
             except Exception:
                 pass
-        # Do not interrupt startup for an optional converter. The user gets a
-        # precise diagnostic only if MOBI/AZW3 is actually selected.
         return status
 
     def __init__(self, kccapp, kccwindow):'''
@@ -74,18 +70,15 @@ def patch_gui(path: Path):
         status = refresh_kindlegen()
         self.addMessage(
             '<b>MOBI/AZW3 暂不可用。</b> ' + diagnostic_text(status) +
-            '。请使用兼容现代 macOS 的 64 位 KindleGen，或安装 Kindle Previewer 3。',
+            '。当前版本正常情况下应自带 Apple Silicon Kindling；也可回退使用 Kindle Previewer 3。',
             'error'
         )
 
     def saveSettings(self, event):'''
     text, count = missing_pattern.subn(missing_replacement, text, count=1)
     if count != 1:
-        fail(f"替换 KindleGen 缺失提示失败（{count}）")
+        fail(f"替换 MOBI/AZW3 引擎缺失提示失败（{count}）")
 
-    # WorkerThread used to reset self.errors for each source and therefore
-    # could report "All jobs completed" when an earlier item failed but the
-    # final item succeeded. Keep per-item errors and an aggregate flag.
     worker_start = text.find("class WorkerThread(QThread):")
     worker_end = text.find("\nclass SystemTrayIcon", worker_start)
     if worker_start < 0 or worker_end < 0:
@@ -103,7 +96,6 @@ def patch_gui(path: Path):
             lambda m: m.group(0) + "\n" + m.group(1) + "self.anyErrors = True",
             worker,
         )
-        # Only the final completion gate should use the aggregate flag.
         final_gate = worker.rfind("        if not self.errors:\n            MW.addMessage.emit('<b>All jobs completed.</b>'")
         if final_gate >= 0:
             worker = worker[:final_gate] + worker[final_gate:].replace(
@@ -116,7 +108,7 @@ def patch_gui(path: Path):
         text = text[:worker_start] + worker + text[worker_end:]
 
     path.write_text(text, encoding="utf-8")
-    print("[完成] GUI KindleGen/错误状态加固")
+    print("[完成] GUI MOBI/AZW3 引擎与错误状态加固")
 
 
 def patch_core(path: Path):
@@ -127,31 +119,26 @@ def patch_core(path: Path):
             text,
             anchor,
             anchor + "from .kindlegen_runtime import get_kindlegen_path\n",
-            "core 导入 KindleGen resolver",
+            "core 导入 MOBI/AZW3 引擎 resolver",
         )
 
-    # Both the initial option check and the actual MOBI worker must resolve the
-    # same executable. This prevents GUI/CLI disagreement and stale PATH bugs.
     text = text.replace("subprocess_run(['kindlegen',", "subprocess_run([get_kindlegen_path(),")
     if text.count("subprocess_run(['kindlegen',"):
         fail("仍存在硬编码 kindlegen 调用")
 
-    # A missing/incompatible executable in a multiprocessing worker previously
-    # escaped as OSError and could kill the worker pool. Convert it to a normal
-    # KCC error result so cleanup/UI handling remains intact.
     marker = "    except CalledProcessError as err:\n        warnings = []\n"
-    if "KindleGen unavailable:" not in text:
+    if "MOBI engine unavailable:" not in text and "KindleGen unavailable:" not in text:
         text = replace_once(
             text,
             marker,
             "    except OSError as err:\n"
-            "        return [-2, 'KindleGen unavailable: ' + (getattr(err, 'strerror', None) or str(err)), item, []]\n"
+            "        return [-2, 'MOBI engine unavailable: ' + (getattr(err, 'strerror', None) or str(err)), item, []]\n"
             + marker,
             "MOBI worker OSError 防护",
         )
 
     path.write_text(text, encoding="utf-8")
-    print("[完成] comic2ebook KindleGen 调用加固")
+    print("[完成] comic2ebook MOBI/AZW3 引擎调用加固")
 
 
 def main():
@@ -169,7 +156,7 @@ def main():
     shutil.copy2(runtime_src, runtime_dst)
     patch_gui(gui)
     patch_core(core)
-    print("[完成] v1.2 运行时加固补丁")
+    print("[完成] v1.3 运行时加固补丁")
 
 
 if __name__ == "__main__":
