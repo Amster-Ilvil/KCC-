@@ -118,18 +118,17 @@ def patch_core(path: Path):
         text = replace_once(
             text,
             anchor,
-            anchor + "from .kindlegen_runtime import get_kindlegen_path\n",
+            anchor + "from .kindlegen_runtime import get_kindlegen_path, build_mobi_command\n",
             "core 导入 MOBI/AZW3 引擎 resolver",
         )
 
     # Upstream probes KindleGen by running `kindlegen -locale en` with no input.
-    # Kindling's compatibility mode is intentionally activated when an EPUB/OPF
-    # is the first argument, so that historical no-input probe is not a valid
-    # health check. Our resolver already executes an engine-specific probe.
+    # Kindling compatibility mode requires EPUB/OPF to be the first argument, so
+    # the no-input probe is replaced by the engine-specific resolver probe.
     preflight_pattern = re.compile(
         r"    if options\.format == 'MOBI':\n"
         r"        try:\n"
-        r"            subprocess_run\(\[(?:'kindlegen'|get_kindlegen_path\(\)), '-locale', 'en'\], stdout=PIPE, stderr=STDOUT, check=True\)\n"
+        r"            subprocess_run\(\['kindlegen', '-locale', 'en'\], stdout=PIPE, stderr=STDOUT, check=True\)\n"
         r"        except \(FileNotFoundError, CalledProcessError\):\n"
         r"            print\('ERROR: KindleGen is missing!'\)\n"
         r"            sys\.exit\(1\)\n"
@@ -150,11 +149,15 @@ def patch_core(path: Path):
     if preflight_count != 1:
         fail(f"替换 MOBI/AZW3 预检查失败（{preflight_count}）")
 
-    # Actual conversion keeps KCC's historical KindleGen command line. Kindling
-    # documents the EPUB-first invocation as a drop-in compatibility mode and
-    # accepts -dont_append_source, -locale and the same :I1036: status marker.
-    text = text.replace("subprocess_run(['kindlegen',", "subprocess_run([get_kindlegen_path(),")
-    if text.count("subprocess_run(['kindlegen',"):
+    # KCC's historical KindleGen invocation places flags before the EPUB. Real
+    # KindleGen accepts that, while Kindling activates its compatibility parser
+    # only when EPUB/OPF is the first argument. Delegate ordering to the resolver.
+    worker_call = "subprocess_run(['kindlegen', '-dont_append_source', '-locale', 'en', item],"
+    if text.count(worker_call) != 1:
+        fail(f"定位 MOBI worker KindleGen 调用失败（{text.count(worker_call)}）")
+    text = text.replace(worker_call, "subprocess_run(build_mobi_command(item),", 1)
+
+    if "subprocess_run(['kindlegen'" in text:
         fail("仍存在硬编码 kindlegen 调用")
 
     marker = "    except CalledProcessError as err:\n        warnings = []\n"
