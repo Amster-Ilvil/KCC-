@@ -1,11 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Build the macOS iconset from the project avatar supplied by the project owner.
-
-The source image is stored as base64 text in assets/project_avatar.webp.b64 so it
-can be kept losslessly/portably through the GitHub connector.  CI decodes the
-same source for the visible repository asset and DMG volume icon.
-"""
+"""Build the macOS iconset from the unified project avatar source."""
 from __future__ import annotations
 
 import base64
@@ -20,19 +15,37 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = REPO_ROOT / "assets" / "project_avatar.webp.b64"
 
 
+def _read_b64(path: Path) -> bytes:
+    if path.is_file():
+        parts = [path]
+    else:
+        parts = sorted(path.parent.glob(path.name + ".*"))
+    if not parts:
+        raise FileNotFoundError(f"project avatar source not found: {path} or {path.name}.*")
+
+    encoded = "".join(
+        "".join(part.read_text(encoding="utf-8").split())
+        for part in parts
+    )
+    raw = base64.b64decode(encoded, validate=True)
+    if len(raw) < 12 or not raw.startswith(b"RIFF") or raw[8:12] != b"WEBP":
+        raise ValueError("project avatar payload is not a valid WebP container")
+    return raw
+
+
 def _load_source(path: Path) -> Image.Image:
-    if path.suffix.lower() == ".b64":
-        raw = base64.b64decode("".join(path.read_text(encoding="utf-8").split()))
-        image = Image.open(io.BytesIO(raw))
+    if ".b64" in path.name:
+        image = Image.open(io.BytesIO(_read_b64(path)))
     else:
         image = Image.open(path)
+    image.load()
     return image.convert("RGBA")
 
 
 def _build_master(source: Path) -> Image.Image:
     image = _load_source(source)
-    # Preserve the supplied artwork.  Only fit it to a square canvas and resize;
-    # no generated decorations, text, watermark, sharpening or colour changes.
+    # Preserve the supplied artwork. Only fit to a square transparent canvas and
+    # resize. Do not add generated decoration, text, watermark or colour changes.
     image = ImageOps.contain(image, (SIZE, SIZE), method=Image.Resampling.LANCZOS)
     master = Image.new("RGBA", (SIZE, SIZE), (0, 0, 0, 0))
     master.alpha_composite(image, ((SIZE - image.width) // 2, (SIZE - image.height) // 2))
@@ -40,9 +53,6 @@ def _build_master(source: Path) -> Image.Image:
 
 
 def save_iconset(out_dir: Path, source: Path = DEFAULT_SOURCE) -> None:
-    if not source.is_file():
-        raise FileNotFoundError(f"project avatar source not found: {source}")
-
     out_dir.mkdir(parents=True, exist_ok=True)
     master = _build_master(source)
     specs = [
