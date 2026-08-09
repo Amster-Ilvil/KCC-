@@ -292,20 +292,26 @@ def main():
     runtime_dst = root / "kindlecomicconverter" / "kindlegen_runtime.py"
     compression_src = patch_dir / "kindle_cn_compress.py"
     compression_dst = root / "kindlecomicconverter" / "kindle_cn_compress.py"
+    scan_src = patch_dir / "kindle_cn_scan_processing.py"
+    scan_dst = root / "kindlecomicconverter" / "kindle_cn_scan_processing.py"
     if not gui.is_file() or not core.is_file() or not spec.is_file():
         fail("目标源码不完整")
-    if not runtime_src.is_file():
-        fail("缺少 kindlegen_runtime.py")
-    if not compression_src.is_file():
-        fail("缺少 kindle_cn_compress.py")
+    for source, label in (
+        (runtime_src, "kindlegen_runtime.py"),
+        (compression_src, "kindle_cn_compress.py"),
+        (scan_src, "kindle_cn_scan_processing.py"),
+    ):
+        if not source.is_file():
+            fail(f"缺少 {label}")
 
     shutil.copy2(runtime_src, runtime_dst)
+    shutil.copy2(scan_src, scan_dst)
     shutil.copy2(compression_src, compression_dst)
     bundle_oxipng = prepare_oxipng(root)
     patch_macos_spec(spec, bundle_oxipng)
     patch_gui(gui)
     patch_core(core)
-    print("[完成] Kindle 中文版运行时加固、无损压缩模块与 OxiPNG 打包配置")
+    print("[完成] Kindle 中文版运行时加固、智能压缩/扫描处理与 OxiPNG 打包配置")
 
 
 if __name__ == "__main__":
