@@ -122,6 +122,37 @@ def patch_core(path: Path):
             "core 导入 MOBI/AZW3 引擎 resolver",
         )
 
+    # Upstream probes KindleGen by running `kindlegen -locale en` with no input.
+    # Kindling's compatibility mode is intentionally activated when an EPUB/OPF
+    # is the first argument, so that historical no-input probe is not a valid
+    # health check. Our resolver already executes an engine-specific probe.
+    preflight_pattern = re.compile(
+        r"    if options\.format == 'MOBI':\n"
+        r"        try:\n"
+        r"            subprocess_run\(\[(?:'kindlegen'|get_kindlegen_path\(\)), '-locale', 'en'\], stdout=PIPE, stderr=STDOUT, check=True\)\n"
+        r"        except \(FileNotFoundError, CalledProcessError\):\n"
+        r"            print\('ERROR: KindleGen is missing!'\)\n"
+        r"            sys\.exit\(1\)\n"
+        r"        except OSError as e:\n"
+        r"            print\(f\"kindlegen: \{e\.strerror\}\"\)\n"
+        r"            print\('Re-install Rosetta/Kindle Previewer/other Intel app\?'\)\n"
+        r"            print\('Please email Amazon to make Kindle Previewer Apple silicon native at amazon\.com/kindle-help'\)\n"
+        r"            sys\.exit\(1\)\n"
+    )
+    preflight_replacement = '''    if options.format == 'MOBI':
+        try:
+            get_kindlegen_path()
+        except OSError as e:
+            print('ERROR: MOBI/AZW3 engine unavailable: ' + (getattr(e, 'strerror', None) or str(e)))
+            sys.exit(1)
+'''
+    text, preflight_count = preflight_pattern.subn(preflight_replacement, text, count=1)
+    if preflight_count != 1:
+        fail(f"替换 MOBI/AZW3 预检查失败（{preflight_count}）")
+
+    # Actual conversion keeps KCC's historical KindleGen command line. Kindling
+    # documents the EPUB-first invocation as a drop-in compatibility mode and
+    # accepts -dont_append_source, -locale and the same :I1036: status marker.
     text = text.replace("subprocess_run(['kindlegen',", "subprocess_run([get_kindlegen_path(),")
     if text.count("subprocess_run(['kindlegen',"):
         fail("仍存在硬编码 kindlegen 调用")
