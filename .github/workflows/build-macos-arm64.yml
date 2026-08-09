@@ -30,7 +30,8 @@ env:
   UPSTREAM_COMMIT: bd0328a12fe40ab62285d3a8ae3e501f6e41c78b
   PYTHON_VERSION: '3.11'
   PRODUCT_NAME: Kindle漫画转换器
-  DMG_NAME: KCC_11.0.1_Kindle_CN_AppleSilicon.dmg
+  PRODUCT_VERSION: '1.1.0'
+  DMG_NAME: KCC_11.0.1_Kindle_CN_v1.1_AppleSilicon.dmg
 
 jobs:
   build:
@@ -72,11 +73,15 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python -m py_compile patch/patch_kcc.py patch/kindle_cn_ui.py
+          python -m py_compile patch/patch_kcc.py patch/kindle_cn_ui.py patch/kindle_cn_enhancements.py
           python patch/patch_kcc.py upstream
-          python -m py_compile upstream/kindlecomicconverter/KCC_gui.py upstream/kindlecomicconverter/kindle_cn_ui.py
+          python -m py_compile \
+            upstream/kindlecomicconverter/KCC_gui.py \
+            upstream/kindlecomicconverter/kindle_cn_ui.py \
+            upstream/kindlecomicconverter/kindle_cn_enhancements.py
 
           grep -q 'apply_kindle_cn_ui(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
+          grep -q 'install_enhancements(self, MW)' upstream/kindlecomicconverter/KCC_gui.py
           grep -q 'Kindle 专用 · 简体中文 · 无广告/推广' upstream/kindlecomicconverter/KCC_gui.py
           grep -q 'self.versionCheck.start()' upstream/kindlecomicconverter/KCC_gui.py && {
             echo 'ERROR: version/announcement thread is still enabled'; exit 1;
@@ -104,6 +109,17 @@ jobs:
           print('PySide6', PySide6.__version__)
           assert platform.machine() == 'arm64'
           PY
+
+      - name: Generate Kindle Chinese app icon
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          rm -rf icons/KCCKindle.iconset
+          python ../build/make_icon.py icons/KCCKindle.iconset
+          iconutil -c icns icons/KCCKindle.iconset -o icons/comic2ebook.icns
+          test -s icons/comic2ebook.icns
+          file icons/comic2ebook.icns
 
       - name: Build application with PyInstaller
         shell: bash
@@ -137,8 +153,8 @@ jobs:
           plist_set CFBundleName string "$PRODUCT_NAME"
           plist_set CFBundleDisplayName string "$PRODUCT_NAME"
           plist_set CFBundleIdentifier string "io.github.amster-ilvil.kcc-kindle-cn"
-          plist_set CFBundleShortVersionString string "1.0.0"
-          plist_set CFBundleVersion string "1"
+          plist_set CFBundleShortVersionString string "$PRODUCT_VERSION"
+          plist_set CFBundleVersion string "2"
           plist_set NSHighResolutionCapable bool true
           plutil -lint "$PLIST"
 
@@ -164,7 +180,7 @@ jobs:
           /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
           /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | tee ../codesign-info.txt
 
-      - name: Smoke-check bundled executable
+      - name: Smoke-check bundled executable and UI startup
         shell: bash
         working-directory: upstream
         run: |
@@ -175,7 +191,22 @@ jobs:
           /usr/bin/file "$EXE" | tee ../binary-info.txt
           /usr/bin/file "$EXE" | grep -q 'arm64'
           plutil -p "$APP/Contents/Info.plist" | tee ../plist-info.txt
-          strings "$EXE" | grep -q 'Kindle Comic Converter' || true
+
+          # Real startup smoke test: allow Qt to construct the entire redesigned
+          # UI offscreen. Import errors, missing plugins and most init crashes
+          # will terminate the process and fail this build.
+          : > ../launch-smoke.log
+          QT_QPA_PLATFORM=offscreen "$EXE" > ../launch-smoke.log 2>&1 &
+          PID=$!
+          sleep 7
+          if ! kill -0 "$PID" 2>/dev/null; then
+            echo 'ERROR: app exited during startup smoke test'
+            cat ../launch-smoke.log
+            exit 1
+          fi
+          kill "$PID" 2>/dev/null || true
+          wait "$PID" 2>/dev/null || true
+          echo 'UI startup smoke test: PASS' | tee -a ../launch-smoke.log
 
       - name: Package .app zip preserving macOS metadata
         shell: bash
@@ -212,6 +243,7 @@ jobs:
           shasum -a 256 "${PRODUCT_NAME}.app.zip" "${DMG_NAME}" > SHA256SUMS.txt
           {
             echo "KCC Kindle 中文版 build report"
+            echo "Product: ${PRODUCT_VERSION}"
             echo "Upstream: v11.0.1 @ ${UPSTREAM_COMMIT}"
             echo "Runner: $(sw_vers -productVersion) / $(uname -m)"
             echo "Python: $(python --version 2>&1)"
@@ -223,7 +255,7 @@ jobs:
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          name: KCC-Kindle-CN-AppleSilicon
+          name: KCC-Kindle-CN-v1.1-AppleSilicon
           path: |
             upstream/package/${{ env.PRODUCT_NAME }}.app.zip
             upstream/package/${{ env.DMG_NAME }}
@@ -232,6 +264,7 @@ jobs:
             codesign-info.txt
             binary-info.txt
             plist-info.txt
+            launch-smoke.log
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
