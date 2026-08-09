@@ -41,13 +41,20 @@ jobs:
           python3 - <<'PY'
           from pathlib import Path
           import base64
-          src = Path('assets/project_avatar.webp.b64')
-          dst = Path('assets/project_avatar.webp')
-          raw = base64.b64decode(''.join(src.read_text(encoding='utf-8').split()))
-          if not raw.startswith(b'RIFF') or raw[8:12] != b'WEBP':
+
+          assets = Path('assets')
+          parts = sorted(assets.glob('project_avatar.webp.b64.*'))
+          if not parts:
+              raise SystemExit('no project avatar base64 chunks found')
+          encoded = ''.join(
+              ''.join(p.read_text(encoding='utf-8').split()) for p in parts
+          )
+          raw = base64.b64decode(encoded, validate=True)
+          if len(raw) < 12 or not raw.startswith(b'RIFF') or raw[8:12] != b'WEBP':
               raise SystemExit('avatar source is not a valid WebP payload')
+          dst = assets / 'project_avatar.webp'
           dst.write_bytes(raw)
-          print(f'project avatar: {dst} ({len(raw)} bytes)')
+          print(f'project avatar: {dst} ({len(raw)} bytes, {len(parts)} chunks)')
           PY
           file assets/project_avatar.webp
           test -s assets/project_avatar.webp
@@ -119,8 +126,6 @@ jobs:
           ln -s /Applications "$STAGE/Applications"
           cp "$ICON" "$STAGE/.VolumeIcon.icns"
 
-          # Build a writable image first, set Finder's custom-volume-icon flag on
-          # the mounted root, then convert to the final compressed read-only DMG.
           hdiutil create \
             -volname "$PRODUCT_NAME" \
             -srcfolder "$STAGE" \
