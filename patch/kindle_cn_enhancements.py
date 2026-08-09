@@ -7,6 +7,7 @@ rebase and audit.
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, QTimer
+from PySide6.QtGui import QFontDatabase
 from PySide6.QtWidgets import QLabel, QPushButton, QHBoxLayout
 
 ACCENT = "#2F6FEB"
@@ -31,6 +32,12 @@ def _source_count(job_list):
 
 def install_enhancements(ui, window):
     """Add queue statistics, device guidance and one-click safe presets."""
+    # Use the native macOS UI font instead of Qt's generic Sans Serif alias.
+    try:
+        window.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont))
+    except Exception:
+        pass
+
     # --- Queue summary -----------------------------------------------------
     queue_parent = ui.jobList.parentWidget()
     queue_layout = queue_parent.layout() if queue_parent else None
