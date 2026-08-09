@@ -3,13 +3,20 @@
 """Runtime hardening for KCC Kindle CN.
 
 Runs after patch_kcc.py against the pinned official KCC 11.0.1 source.
+On GitHub's macOS build runner it also builds the pinned OxiPNG binary and adds
+it to the PyInstaller bundle so end users do not need Homebrew or Rust.
 """
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import re
 import shutil
+import subprocess
 import sys
+import urllib.request
+
+OXIPNG_VERSION = "10.1.1"
 
 
 def fail(msg: str):
@@ -21,6 +28,94 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
     if count != 1:
         fail(f"{label}：期望 1 处，实际 {count} 处")
     return text.replace(old, new, 1)
+
+
+def prepare_oxipng(root: Path) -> bool:
+    """Build pinned OxiPNG on GitHub macOS arm64 and stage binary/license."""
+    tools = root / "tools"
+    licenses = root / "licenses"
+    binary = tools / "oxipng"
+    license_file = licenses / "OXIPNG-LICENSE.txt"
+
+    if binary.is_file() and license_file.is_file():
+        return True
+
+    # Local source builds remain dependency-free. Pillow is the safe PNG
+    # fallback there. Official GitHub release builds always bundle OxiPNG.
+    if os.environ.get("GITHUB_ACTIONS", "").lower() != "true" or sys.platform != "darwin":
+        print("[提示] 本地源码构建未发现 OxiPNG，将使用 Pillow 无损 PNG 优化后备。")
+        return False
+
+    cargo = shutil.which("cargo")
+    if not cargo:
+        fail("GitHub macOS Runner 缺少 cargo，无法构建固定版本 OxiPNG")
+
+    install_root = root / ".kcc-oxipng-build"
+    shutil.rmtree(install_root, ignore_errors=True)
+    print(f"[构建] OxiPNG v{OXIPNG_VERSION} Apple Silicon")
+    subprocess.run(
+        [
+            cargo,
+            "install",
+            "oxipng",
+            "--version",
+            OXIPNG_VERSION,
+            "--locked",
+            "--root",
+            os.fspath(install_root),
+        ],
+        check=True,
+    )
+
+    built = install_root / "bin" / "oxipng"
+    if not built.is_file():
+        fail("OxiPNG 构建完成但未找到可执行文件")
+    tools.mkdir(parents=True, exist_ok=True)
+    licenses.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(built, binary)
+    binary.chmod(binary.stat().st_mode | 0o111)
+
+    license_url = f"https://raw.githubusercontent.com/oxipng/oxipng/v{OXIPNG_VERSION}/LICENSE"
+    try:
+        with urllib.request.urlopen(license_url, timeout=30) as response:
+            license_bytes = response.read()
+    except Exception as exc:
+        fail(f"下载 OxiPNG MIT License 失败：{exc}")
+    if len(license_bytes) < 100:
+        fail("OxiPNG License 内容异常")
+    license_file.write_bytes(license_bytes)
+
+    probe = subprocess.run(
+        [os.fspath(binary), "--version"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+        errors="replace",
+        check=False,
+    )
+    print(probe.stdout.strip())
+    if probe.returncode != 0 or OXIPNG_VERSION not in probe.stdout:
+        fail("OxiPNG 版本/可执行性验证失败")
+    return True
+
+
+def patch_macos_spec(path: Path, bundle_oxipng: bool) -> None:
+    if not bundle_oxipng:
+        return
+    text = path.read_text(encoding="utf-8")
+    if "tools/oxipng" in text:
+        return
+    text = replace_once(
+        text,
+        "    datas=[],\n",
+        "    datas=[\n"
+        "        ('tools/oxipng', 'tools'),\n"
+        "        ('licenses/OXIPNG-LICENSE.txt', 'licenses'),\n"
+        "    ],\n",
+        "PyInstaller 内置 OxiPNG",
+    )
+    path.write_text(text, encoding="utf-8")
+    print("[完成] PyInstaller 已配置内置 OxiPNG 与 MIT License")
 
 
 def patch_gui(path: Path):
@@ -191,22 +286,26 @@ def main():
     root = Path(sys.argv[1]).expanduser().resolve()
     gui = root / "kindlecomicconverter" / "KCC_gui.py"
     core = root / "kindlecomicconverter" / "comic2ebook.py"
+    spec = root / "kcc-macos.spec"
     patch_dir = Path(__file__).parent
     runtime_src = patch_dir / "kindlegen_runtime.py"
     runtime_dst = root / "kindlecomicconverter" / "kindlegen_runtime.py"
     compression_src = patch_dir / "kindle_cn_compress.py"
     compression_dst = root / "kindlecomicconverter" / "kindle_cn_compress.py"
-    if not gui.is_file() or not core.is_file():
+    if not gui.is_file() or not core.is_file() or not spec.is_file():
         fail("目标源码不完整")
     if not runtime_src.is_file():
         fail("缺少 kindlegen_runtime.py")
     if not compression_src.is_file():
         fail("缺少 kindle_cn_compress.py")
+
     shutil.copy2(runtime_src, runtime_dst)
     shutil.copy2(compression_src, compression_dst)
+    bundle_oxipng = prepare_oxipng(root)
+    patch_macos_spec(spec, bundle_oxipng)
     patch_gui(gui)
     patch_core(core)
-    print("[完成] Kindle 中文版运行时加固与无损压缩模块注入")
+    print("[完成] Kindle 中文版运行时加固、无损压缩模块与 OxiPNG 打包配置")
 
 
 if __name__ == "__main__":
