@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""Runtime hardening for KCC Kindle CN v1.3.
+"""Runtime hardening for KCC Kindle CN.
 
 Runs after patch_kcc.py against the pinned official KCC 11.0.1 source.
 """
@@ -26,9 +26,6 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 def patch_gui(path: Path):
     text = path.read_text(encoding="utf-8")
 
-    # Set the macOS Qt system font before generated UI widgets are constructed.
-    # This avoids Qt falling back through the generic "Sans Serif" alias while
-    # keeping the app free of bundled/proprietary font files.
     if "QFontDatabase" not in text:
         text = replace_once(
             text,
@@ -68,8 +65,6 @@ def patch_gui(path: Path):
         status = refresh_kindlegen()
         self.kindleGen = status.usable
         self.kindleGenPath = status.path if status.usable else ''
-        # Amazon KindleGen and Kindling use unrelated version schemes. Only
-        # apply the historical 2.9 minimum to a real Amazon KindleGen binary.
         if status.usable and status.engine == 'kindlegen' and status.version:
             try:
                 if Version(status.version) < Version('2.9'):
@@ -196,16 +191,22 @@ def main():
     root = Path(sys.argv[1]).expanduser().resolve()
     gui = root / "kindlecomicconverter" / "KCC_gui.py"
     core = root / "kindlecomicconverter" / "comic2ebook.py"
-    runtime_src = Path(__file__).with_name("kindlegen_runtime.py")
+    patch_dir = Path(__file__).parent
+    runtime_src = patch_dir / "kindlegen_runtime.py"
     runtime_dst = root / "kindlecomicconverter" / "kindlegen_runtime.py"
+    compression_src = patch_dir / "kindle_cn_compress.py"
+    compression_dst = root / "kindlecomicconverter" / "kindle_cn_compress.py"
     if not gui.is_file() or not core.is_file():
         fail("目标源码不完整")
     if not runtime_src.is_file():
         fail("缺少 kindlegen_runtime.py")
+    if not compression_src.is_file():
+        fail("缺少 kindle_cn_compress.py")
     shutil.copy2(runtime_src, runtime_dst)
+    shutil.copy2(compression_src, compression_dst)
     patch_gui(gui)
     patch_core(core)
-    print("[完成] v1.3 运行时加固补丁")
+    print("[完成] Kindle 中文版运行时加固与无损压缩模块注入")
 
 
 if __name__ == "__main__":
