@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import base64
+import hashlib
 import io
 import sys
 from pathlib import Path
@@ -13,6 +14,7 @@ from PIL import Image, ImageOps
 SIZE = 1024
 REPO_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_SOURCE = REPO_ROOT / "assets" / "project_avatar.webp.b64"
+EXPECTED_AVATAR_SHA256 = "15ba2af56e36073feed28811bf89ef65707cb129659871f78041db7d330ad5f8"
 
 
 def _read_b64(path: Path) -> bytes:
@@ -30,6 +32,13 @@ def _read_b64(path: Path) -> bytes:
     raw = base64.b64decode(encoded, validate=True)
     if len(raw) < 12 or not raw.startswith(b"RIFF") or raw[8:12] != b"WEBP":
         raise ValueError("project avatar payload is not a valid WebP container")
+
+    if path == DEFAULT_SOURCE:
+        digest = hashlib.sha256(raw).hexdigest()
+        if digest != EXPECTED_AVATAR_SHA256:
+            raise ValueError(
+                f"project avatar SHA-256 mismatch: expected {EXPECTED_AVATAR_SHA256}, got {digest}"
+            )
     return raw
 
 
