@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import re
+import subprocess
 import sys
 from pathlib import Path
 
@@ -27,8 +28,6 @@ PATTERNS = [
     ("个人 GitHub 标识", re.compile(rf"\b{re.escape(_PERSONAL_OWNER)}\b", re.I)),
 ]
 
-# Domain labels must begin with a letter; this avoids treating icon_16x16@2x.png
-# and similar macOS asset filenames as e-mail addresses.
 EMAIL_RE = re.compile(
     r"(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z][A-Z0-9-]*(?:\.[A-Z0-9-]+)*\.[A-Z]{2,})(?![\w.-])",
     re.I,
@@ -40,7 +39,7 @@ def iter_text_files():
     for path in ROOT.rglob("*"):
         if not path.is_file():
             continue
-        if path.resolve() == SELF:
+        if path.resolve() == SELF or path.name in {"privacy_audit.py", "privacy_scan.py"}:
             continue
         if any(part in SKIP_DIRS for part in path.parts):
             continue
@@ -61,8 +60,6 @@ def main() -> int:
             for match in pattern.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1
                 line_text = lines[line - 1] if 0 < line <= len(lines) else ""
-                # The build workflow deliberately checks that the old owner marker
-                # is absent from the generated Info.plist. Do not flag that guard.
                 if label == "个人 GitHub 标识" and "grep -qi" in line_text and "PLIST" in line_text:
                     continue
                 findings.append(f"{rel}:{line}: {label}: {match.group(0)[:120]}")
@@ -79,7 +76,14 @@ def main() -> int:
             print(" -", item)
         return 1
 
-    print("PRIVACY SCAN: PASS — 未发现本机用户路径、个人邮箱、私钥、常见 Token 或个人 GitHub 标识。")
+    standardized = ROOT / "scripts" / "privacy_audit.py"
+    if standardized.is_file():
+        result = subprocess.run([sys.executable, str(standardized)], cwd=ROOT, check=False)
+        if result.returncode != 0:
+            print("PRIVACY SCAN: FAIL — standardized repository audit failed")
+            return int(result.returncode)
+
+    print("PRIVACY SCAN: PASS — legacy and standardized privacy checks passed.")
     return 0
 
 
