@@ -1,0 +1,2 @@
+KCC Kindle 中文版 v1.5.0 release source build trigger.
+Adaptive compression PR #14 merged and both PR CI workflows passed.
