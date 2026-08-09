@@ -1,0 +1,29 @@
+name: Align v1.3.0 release tag
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - '.github/workflows/align-v1.3.0-tag.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  align-tag:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Align v1.3.0 tag to final main
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -f v1.3.0 "$GITHUB_SHA"
+          git push origin refs/tags/v1.3.0 --force
+          echo "v1.3.0 -> $GITHUB_SHA"
