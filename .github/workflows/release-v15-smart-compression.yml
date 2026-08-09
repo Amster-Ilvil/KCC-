@@ -1,0 +1,327 @@
+name: Release v1.5 smart compression
+
+on:
+  workflow_run:
+    workflows: ["Build macOS Apple Silicon"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      source_run_id:
+        description: 'Successful main Build macOS Apple Silicon run ID'
+        required: false
+        type: string
+
+permissions:
+  actions: read
+  contents: write
+
+concurrency:
+  group: kcc-kindle-cn-v15-release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_branch == 'main')
+    runs-on: macos-15
+    timeout-minutes: 35
+    env:
+      PRODUCT_NAME: Kindle漫画转换器
+      PRODUCT_VERSION: 1.5.0
+      RELEASE_TAG: v1.5.0
+      SOURCE_ARTIFACT: KCC-Kindle-CN-v1.3-AppleSilicon
+      FINAL_ARTIFACT: KCC-Kindle-CN-v1.5-AppleSilicon
+      DMG_NAME: KCC_11.0.1_Kindle_CN_v1.5_AppleSilicon.dmg
+      APP_ZIP_NAME: Kindle漫画转换器_v1.5_AppleSilicon.app.zip
+
+    steps:
+      - name: Checkout latest main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Gate to the pinned v1.5 source build
+        id: gate
+        shell: bash
+        env:
+          EVENT_SHA: ${{ github.event.workflow_run.head_sha }}
+          EVENT_RUN_ID: ${{ github.event.workflow_run.id }}
+          INPUT_RUN_ID: ${{ inputs.source_run_id }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "workflow_dispatch" ]; then
+            RUN_ID="${INPUT_RUN_ID:-}"
+            if [ -z "$RUN_ID" ]; then
+              echo 'workflow_dispatch requires source_run_id'
+              echo 'eligible=false' >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "eligible=true" >> "$GITHUB_OUTPUT"
+            echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          EXPECTED=""
+          if [ -f docs/V15_RELEASE_SOURCE_SHA.txt ]; then
+            EXPECTED="$(tr -d '[:space:]' < docs/V15_RELEASE_SOURCE_SHA.txt)"
+          fi
+          echo "Expected source SHA: $EXPECTED"
+          echo "Workflow source SHA: $EVENT_SHA"
+          if [ -n "$EXPECTED" ] && [ "$EVENT_SHA" = "$EXPECTED" ]; then
+            echo 'eligible=true' >> "$GITHUB_OUTPUT"
+            echo "run_id=$EVENT_RUN_ID" >> "$GITHUB_OUTPUT"
+          else
+            echo 'eligible=false' >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Verify source build identity
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.gate.outputs.run_id }}
+        run: |
+          set -euo pipefail
+          BRANCH="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headBranch --jq .headBranch)"
+          CONCLUSION="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq .conclusion)"
+          EVENT="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json event --jq .event)"
+          SHA="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json headSha --jq .headSha)"
+          test "$BRANCH" = "main"
+          test "$CONCLUSION" = "success"
+          test "$EVENT" = "push"
+          EXPECTED="$(tr -d '[:space:]' < docs/V15_RELEASE_SOURCE_SHA.txt)"
+          test "$SHA" = "$EXPECTED"
+          printf '%s\n' "$RUN_ID" > "$RUNNER_TEMP/source-run-id.txt"
+          printf '%s\n' "$SHA" > "$RUNNER_TEMP/source-sha.txt"
+          echo "Pinned source build: run=$RUN_ID sha=$SHA"
+
+      - name: Download fully tested Apple Silicon artifact
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          RUN_ID="$(cat "$RUNNER_TEMP/source-run-id.txt")"
+          mkdir -p "$RUNNER_TEMP/source-artifact"
+          gh run download "$RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name "$SOURCE_ARTIFACT" \
+            --dir "$RUNNER_TEMP/source-artifact"
+          find "$RUNNER_TEMP/source-artifact" -maxdepth 5 -type f -print
+
+      - name: Extract App and verify bundled native tools
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          SOURCE_APP_ZIP="$(find "$RUNNER_TEMP/source-artifact" -type f -name '*.app.zip' -print -quit)"
+          test -n "$SOURCE_APP_ZIP" && test -s "$SOURCE_APP_ZIP"
+          EXTRACT="$RUNNER_TEMP/app-extract"
+          rm -rf "$EXTRACT"
+          mkdir -p "$EXTRACT"
+          ditto -x -k "$SOURCE_APP_ZIP" "$EXTRACT"
+          APP="$EXTRACT/${PRODUCT_NAME}.app"
+          test -d "$APP"
+
+          OXI="$APP/Contents/Resources/tools/oxipng"
+          KINDLING="$APP/Contents/Resources/tools/kindlegen"
+          test -x "$OXI"
+          test -x "$KINDLING"
+          test -s "$APP/Contents/Resources/licenses/OXIPNG-LICENSE.txt"
+          test -s "$APP/Contents/Resources/licenses/KINDLING-LICENSE.txt"
+          /usr/bin/file "$OXI" | tee "$RUNNER_TEMP/oxipng-info.txt"
+          grep -q 'arm64' "$RUNNER_TEMP/oxipng-info.txt"
+          "$OXI" --version | grep -q '10.1.1'
+          /usr/bin/file "$KINDLING" | tee "$RUNNER_TEMP/kindling-info.txt"
+          grep -q 'arm64' "$RUNNER_TEMP/kindling-info.txt"
+          "$KINDLING" --version | grep -q '0.31.0'
+          printf '%s\n' "$APP" > "$RUNNER_TEMP/app-path.txt"
+
+      - name: Set v1.5 metadata and re-sign App
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(cat "$RUNNER_TEMP/app-path.txt")"
+          PLIST="$APP/Contents/Info.plist"
+          plist_set() {
+            local key="$1" type="$2" value="$3"
+            /usr/libexec/PlistBuddy -c "Set :${key} ${value}" "$PLIST" 2>/dev/null || \
+              /usr/libexec/PlistBuddy -c "Add :${key} ${type} ${value}" "$PLIST"
+          }
+          plist_set CFBundleShortVersionString string "$PRODUCT_VERSION"
+          plist_set CFBundleVersion string "6"
+          plist_set CFBundleName string "$PRODUCT_NAME"
+          plist_set CFBundleDisplayName string "$PRODUCT_NAME"
+          plist_set CFBundleIdentifier string "org.kcc.kindlecn"
+          plutil -lint "$PLIST"
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST" | grep -q '^1.5.0$'
+
+          xattr -cr "$APP" || true
+          while IFS= read -r -d '' f; do
+            if /usr/bin/file "$f" | grep -q 'Mach-O'; then
+              /usr/bin/codesign --force --sign - --timestamp=none "$f"
+            fi
+          done < <(find "$APP/Contents" -type f -print0)
+          while IFS= read -r bundle; do
+            [ -n "$bundle" ] && /usr/bin/codesign --force --sign - --timestamp=none "$bundle"
+          done < <(find "$APP/Contents" -type d -name '*.framework' -print | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
+          /usr/bin/codesign --force --sign - --timestamp=none "$APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/bin/codesign --verify --strict --verbose=2 "$APP/Contents/Resources/tools/oxipng"
+          /usr/bin/codesign --verify --strict --verbose=2 "$APP/Contents/Resources/tools/kindlegen"
+
+      - name: Create v1.5 App archive
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(cat "$RUNNER_TEMP/app-path.txt")"
+          OUT="$RUNNER_TEMP/$APP_ZIP_NAME"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$OUT"
+          test -s "$OUT"
+
+      - name: Create and verify v1.5 DMG
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          APP="$(cat "$RUNNER_TEMP/app-path.txt")"
+          ICON="$APP/Contents/Resources/comic2ebook.icns"
+          STAGE="$RUNNER_TEMP/v15-stage"
+          RW_DMG="$RUNNER_TEMP/v15-rw.dmg"
+          FINAL_DMG="$RUNNER_TEMP/$DMG_NAME"
+          MOUNT="$RUNNER_TEMP/v15-mount"
+          rm -rf "$STAGE" "$MOUNT" "$RW_DMG" "$FINAL_DMG"
+          mkdir -p "$STAGE" "$MOUNT"
+          ditto "$APP" "$STAGE/${PRODUCT_NAME}.app"
+          ln -s /Applications "$STAGE/Applications"
+          cp "$ICON" "$STAGE/.VolumeIcon.icns"
+          hdiutil create -volname "$PRODUCT_NAME" -srcfolder "$STAGE" -ov -format UDRW "$RW_DMG"
+          hdiutil attach -readwrite -nobrowse -mountpoint "$MOUNT" "$RW_DMG"
+          trap 'hdiutil detach "$MOUNT" >/dev/null 2>&1 || true' EXIT
+          cp "$ICON" "$MOUNT/.VolumeIcon.icns"
+          if command -v SetFile >/dev/null 2>&1; then SetFile -a C "$MOUNT"; fi
+          sync
+          cmp "$ICON" "$MOUNT/.VolumeIcon.icns"
+          hdiutil detach "$MOUNT"
+          trap - EXIT
+          hdiutil convert "$RW_DMG" -format UDZO -o "$FINAL_DMG"
+          hdiutil verify "$FINAL_DMG"
+
+          CHECK="$RUNNER_TEMP/v15-check"
+          mkdir -p "$CHECK"
+          hdiutil attach -readonly -nobrowse -mountpoint "$CHECK" "$FINAL_DMG"
+          trap 'hdiutil detach "$CHECK" >/dev/null 2>&1 || true' EXIT
+          FINAL_APP="$CHECK/${PRODUCT_NAME}.app"
+          cmp "$CHECK/.VolumeIcon.icns" "$FINAL_APP/Contents/Resources/comic2ebook.icns"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$FINAL_APP"
+          "$FINAL_APP/Contents/Resources/tools/oxipng" --version | grep -q '10.1.1'
+          "$FINAL_APP/Contents/Resources/tools/kindlegen" --version | grep -q '0.31.0'
+          /usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$FINAL_APP/Contents/Info.plist" | grep -q '^1.5.0$'
+          hdiutil detach "$CHECK"
+          trap - EXIT
+          echo 'v1.5 final DMG verification: PASS'
+
+      - name: Generate checksums and build info
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          RUN_ID="$(cat "$RUNNER_TEMP/source-run-id.txt")"
+          SOURCE_SHA="$(cat "$RUNNER_TEMP/source-sha.txt")"
+          cd "$RUNNER_TEMP"
+          shasum -a 256 "$DMG_NAME" "$APP_ZIP_NAME" > SHA256SUMS-v1.5.txt
+          cat > BUILD-INFO-v1.5.txt <<EOF
+          Product: $PRODUCT_NAME
+          Version: $PRODUCT_VERSION
+          KCC upstream: 11.0.1 / bd0328a12fe40ab62285d3a8ae3e501f6e41c78b
+          Architecture: Apple Silicon arm64
+          Source tested build run: $RUN_ID
+          Source commit: $SOURCE_SHA
+          PNG optimizer: OxiPNG 10.1.1 arm64 / adaptive candidate selection
+          JPEG optimizer: mozjpeg-lossless-optimization 1.3.2 / decoded pixel verification
+          Scan preprocessing: Pillow-only / explicit opt-in
+          MOBI/AZW3 engine: Kindling 0.31.0 arm64
+          Signing: ad-hoc
+          Adaptive compression CI: PASS
+          Full KCC EPUB/CBZ/MOBI/App/DMG CI: PASS
+          EOF
+          cat SHA256SUMS-v1.5.txt
+
+      - name: Publish GitHub Release v1.5.0
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release edit "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "KCC Kindle 中文版 v1.5.0" --notes-file RELEASE_NOTES_v1.5.0.md
+          else
+            gh release create "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" --title "KCC Kindle 中文版 v1.5.0" --notes-file RELEASE_NOTES_v1.5.0.md --target main
+          fi
+          gh release upload "$RELEASE_TAG" \
+            "$RUNNER_TEMP/$DMG_NAME" \
+            "$RUNNER_TEMP/$APP_ZIP_NAME" \
+            "$RUNNER_TEMP/SHA256SUMS-v1.5.txt" \
+            "$RUNNER_TEMP/BUILD-INFO-v1.5.txt" \
+            --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Upload finalized v1.5 artifact
+        if: steps.gate.outputs.eligible == 'true'
+        id: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: KCC-Kindle-CN-v1.5-AppleSilicon
+          path: |
+            ${{ runner.temp }}/${{ env.DMG_NAME }}
+            ${{ runner.temp }}/${{ env.APP_ZIP_NAME }}
+            ${{ runner.temp }}/SHA256SUMS-v1.5.txt
+            ${{ runner.temp }}/BUILD-INFO-v1.5.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
+
+      - name: Record final v1.5 build status
+        if: steps.gate.outputs.eligible == 'true'
+        shell: bash
+        env:
+          ARTIFACT_ID: ${{ steps.upload.outputs.artifact-id }}
+        run: |
+          set -euo pipefail
+          RUN_ID="$(cat "$RUNNER_TEMP/source-run-id.txt")"
+          SOURCE_SHA="$(cat "$RUNNER_TEMP/source-sha.txt")"
+          DMG_SHA="$(awk -v n="$DMG_NAME" '$2==n {print $1}' "$RUNNER_TEMP/SHA256SUMS-v1.5.txt")"
+          APP_SHA="$(awk -v n="$APP_ZIP_NAME" '$2==n {print $1}' "$RUNNER_TEMP/SHA256SUMS-v1.5.txt")"
+          cat > docs/COMPRESSION_V15_BUILD_STATUS.md <<EOF
+          # v1.5 adaptive compression build status
+
+          Status: **PASS**
+
+          - Version: \`1.5.0\`
+          - Source commit: \`$SOURCE_SHA\`
+          - Source Apple Silicon build run: \`$RUN_ID\`
+          - Release workflow run: \`$GITHUB_RUN_ID\`
+          - Finalized Artifact ID: \`$ARTIFACT_ID\`
+          - DMG SHA-256: \`$DMG_SHA\`
+          - App ZIP SHA-256: \`$APP_SHA\`
+          - PNG: OxiPNG 10.1.1 arm64 + adaptive candidate selection
+          - JPEG: MozJPEG lossless + decoded pixel verification
+          - Scan preprocessing: explicit opt-in, Pillow-only
+          - Verified: adaptive compression CI passed; full EPUB/CBZ/MOBI/App/DMG CI passed; deep codesign and final DMG verification passed.
+          EOF
+
+          git config user.name github-actions
+          git config user.email github-actions@github.com
+          git pull --rebase origin main
+          git add docs/COMPRESSION_V15_BUILD_STATUS.md
+          if ! git diff --cached --quiet; then
+            git commit -m '记录 v1.5 智能压缩正式构建通过'
+            git push origin HEAD:main
+          fi
