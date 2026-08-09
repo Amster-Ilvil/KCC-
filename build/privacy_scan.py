@@ -13,7 +13,7 @@ TEXT_SUFFIXES = {
     ".py", ".md", ".txt", ".yml", ".yaml", ".json", ".toml", ".ini", ".cfg",
     ".sh", ".command", ".ps1", ".plist", ".xml", ".html", ".css", ".js",
 }
-
+SELF = Path(__file__).resolve()
 _PERSONAL_OWNER = "amster" + "-" + "ilvil"
 
 PATTERNS = [
@@ -27,13 +27,20 @@ PATTERNS = [
     ("个人 GitHub 标识", re.compile(rf"\b{re.escape(_PERSONAL_OWNER)}\b", re.I)),
 ]
 
-EMAIL_RE = re.compile(r"(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})(?![\w.-])", re.I)
+# Domain labels must begin with a letter; this avoids treating icon_16x16@2x.png
+# and similar macOS asset filenames as e-mail addresses.
+EMAIL_RE = re.compile(
+    r"(?<![\w.+-])([A-Z0-9._%+-]+@[A-Z][A-Z0-9-]*(?:\.[A-Z0-9-]+)*\.[A-Z]{2,})(?![\w.-])",
+    re.I,
+)
 ALLOWED_EMAIL_DOMAINS = {"users.noreply.github.com"}
 
 
 def iter_text_files():
     for path in ROOT.rglob("*"):
         if not path.is_file():
+            continue
+        if path.resolve() == SELF:
             continue
         if any(part in SKIP_DIRS for part in path.parts):
             continue
