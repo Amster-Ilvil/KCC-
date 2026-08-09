@@ -1,0 +1,1 @@
+KCC Kindle CN v1.2 macOS Apple Silicon validation trigger.
