@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
     paths:
-      - 'assets/project_avatar.webp.b64'
+      - 'assets/project_avatar.webp.b64.*'
   workflow_dispatch:
 
 permissions:
