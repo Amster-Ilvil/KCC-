@@ -25,6 +25,27 @@ def replace_once(text: str, old: str, new: str, label: str) -> str:
 
 def patch_gui(path: Path):
     text = path.read_text(encoding="utf-8")
+
+    # Set the macOS Qt system font before generated UI widgets are constructed.
+    # This avoids Qt falling back through the generic "Sans Serif" alias while
+    # keeping the app free of bundled/proprietary font files.
+    if "QFontDatabase" not in text:
+        text = replace_once(
+            text,
+            "from PySide6.QtGui import (QColor, QIcon, QImage, QKeyEvent, QPixmap, QDesktopServices)\n",
+            "from PySide6.QtGui import (QColor, QIcon, QImage, QKeyEvent, QPixmap, QDesktopServices, QFontDatabase)\n",
+            "加入 Qt 系统字体数据库",
+        )
+        text = replace_once(
+            text,
+            "        QApplication.__init__(self, argv)\n        self._key = 'KCC'\n",
+            "        QApplication.__init__(self, argv)\n"
+            "        if sys.platform == 'darwin':\n"
+            "            self.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont))\n"
+            "        self._key = 'KCC'\n",
+            "应用 macOS Qt 系统字体",
+        )
+
     if "refresh_kindlegen" not in text:
         text = replace_once(
             text,
@@ -122,9 +143,6 @@ def patch_core(path: Path):
             "core 导入 MOBI/AZW3 引擎 resolver",
         )
 
-    # Upstream probes KindleGen by running `kindlegen -locale en` with no input.
-    # Kindling compatibility mode requires EPUB/OPF to be the first argument, so
-    # the no-input probe is replaced by the engine-specific resolver probe.
     preflight_pattern = re.compile(
         r"    if options\.format == 'MOBI':\n"
         r"        try:\n"
@@ -149,9 +167,6 @@ def patch_core(path: Path):
     if preflight_count != 1:
         fail(f"替换 MOBI/AZW3 预检查失败（{preflight_count}）")
 
-    # KCC's historical KindleGen invocation places flags before the EPUB. Real
-    # KindleGen accepts that, while Kindling activates its compatibility parser
-    # only when EPUB/OPF is the first argument. Delegate ordering to the resolver.
     worker_call = "subprocess_run(['kindlegen', '-dont_append_source', '-locale', 'en', item],"
     if text.count(worker_call) != 1:
         fail(f"定位 MOBI worker KindleGen 调用失败（{text.count(worker_call)}）")
