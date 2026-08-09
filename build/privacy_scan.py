@@ -49,9 +49,15 @@ def main() -> int:
         except (UnicodeDecodeError, OSError):
             continue
         rel = path.relative_to(ROOT)
+        lines = text.splitlines()
         for label, pattern in PATTERNS:
             for match in pattern.finditer(text):
                 line = text.count("\n", 0, match.start()) + 1
+                line_text = lines[line - 1] if 0 < line <= len(lines) else ""
+                # The build workflow deliberately checks that the old owner marker
+                # is absent from the generated Info.plist. Do not flag that guard.
+                if label == "个人 GitHub 标识" and "grep -qi" in line_text and "PLIST" in line_text:
+                    continue
                 findings.append(f"{rel}:{line}: {label}: {match.group(0)[:120]}")
         for match in EMAIL_RE.finditer(text):
             email = match.group(1)
