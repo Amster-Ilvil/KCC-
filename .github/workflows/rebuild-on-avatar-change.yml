@@ -1,0 +1,26 @@
+name: Rebuild when project avatar changes
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'assets/project_avatar.webp.b64'
+  workflow_dispatch:
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dispatch Apple Silicon build
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh workflow run build-macos-arm64.yml \
+            --repo "$GITHUB_REPOSITORY" \
+            --ref main
+          echo 'Apple Silicon rebuild dispatched for updated project avatar.'
