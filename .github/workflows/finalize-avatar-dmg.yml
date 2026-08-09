@@ -211,3 +211,34 @@ jobs:
           if-no-files-found: error
           compression-level: 0
           retention-days: 30
+
+      - name: Record verified DMG avatar status in repository
+        shell: bash
+        env:
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          set -euo pipefail
+          DMG_SHA="$(awk '{print $1}' "$RUNNER_TEMP/DMG-AVATAR-SHA256.txt")"
+          AVATAR_SHA="$(awk '{print $1}' "$RUNNER_TEMP/PROJECT-AVATAR-SHA256.txt")"
+          mkdir -p docs
+          cat > docs/AVATAR_BUILD_STATUS.md <<EOF
+          # Avatar / App / DMG build status
+
+          Status: **PASS**
+
+          - Project avatar SHA-256: \`${AVATAR_SHA}\`
+          - Final DMG SHA-256: \`${DMG_SHA}\`
+          - Source Apple Silicon build run: \`${SOURCE_RUN_ID}\`
+          - Verified: App icon generated from project avatar; DMG \`.VolumeIcon.icns\` is byte-identical to the App \`comic2ebook.icns\`; App deep codesign verification passed; final DMG verification passed.
+          EOF
+
+          git add docs/AVATAR_BUILD_STATUS.md
+          if git diff --cached --quiet; then
+            echo 'Avatar build status already current.'
+            exit 0
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m '记录项目/App/DMG 头像验证通过'
+          git pull --rebase origin main
+          git push origin HEAD:main
