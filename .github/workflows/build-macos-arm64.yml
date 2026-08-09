@@ -1,0 +1,213 @@
+name: Build macOS Apple Silicon
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths:
+      - 'patch/**'
+      - 'build/**'
+      - '.github/workflows/build-macos-arm64.yml'
+      - 'README.md'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kcc-kindle-cn-macos-arm64
+  cancel-in-progress: true
+
+env:
+  UPSTREAM_REPO: https://github.com/ciromattia/kcc.git
+  UPSTREAM_REF: v11.0.1
+  UPSTREAM_COMMIT: bd0328a12fe40ab62285d3a8ae3e501f6e41c78b
+  PYTHON_VERSION: '3.11'
+  PRODUCT_NAME: Kindle漫画转换器
+  DMG_NAME: KCC_11.0.1_Kindle_CN_AppleSilicon.dmg
+
+jobs:
+  build:
+    name: Build arm64 app + dmg
+    runs-on: macos-15
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout customization repo
+        uses: actions/checkout@v4
+
+      - name: Confirm Apple Silicon runner
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "macOS: $(sw_vers -productVersion)"
+          echo "Arch: $(uname -m)"
+          test "$(uname -m)" = "arm64"
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+          architecture: arm64
+          cache: pip
+
+      - name: Fetch official KCC 11.0.1 source
+        shell: bash
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --no-checkout "$UPSTREAM_REPO" upstream
+          cd upstream
+          git fetch --depth=1 origin "$UPSTREAM_REF"
+          git checkout --detach FETCH_HEAD
+          ACTUAL="$(git rev-parse HEAD)"
+          echo "Official commit: $ACTUAL"
+          test "$ACTUAL" = "$UPSTREAM_COMMIT"
+
+      - name: Apply Kindle Chinese patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m py_compile patch/patch_kcc.py patch/kindle_cn_ui.py
+          python patch/patch_kcc.py upstream
+          python -m py_compile upstream/kindlecomicconverter/KCC_gui.py upstream/kindlecomicconverter/kindle_cn_ui.py
+
+      - name: Install build dependencies
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          python -m pip install --upgrade pip wheel setuptools
+          python -m pip install -r requirements.txt
+          python -m pip install pyinstaller certifi
+          python - <<'PY'
+          import platform, sys
+          import PySide6
+          print('Python', sys.version)
+          print('Machine', platform.machine())
+          print('PySide6', PySide6.__version__)
+          assert platform.machine() == 'arm64'
+          PY
+
+      - name: Build application with PyInstaller
+        shell: bash
+        working-directory: upstream
+        env:
+          MACOSX_DEPLOYMENT_TARGET: '14.0'
+        run: |
+          set -euo pipefail
+          pyinstaller -y kcc-macos.spec
+          APP="dist/Kindle Comic Converter.app"
+          test -d "$APP"
+          /usr/bin/file "$APP/Contents/MacOS/Kindle Comic Converter"
+          /usr/bin/file "$APP/Contents/MacOS/Kindle Comic Converter" | grep -q 'arm64'
+
+      - name: Rename and set bundle metadata
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          OLD="dist/Kindle Comic Converter.app"
+          NEW="dist/${PRODUCT_NAME}.app"
+          mv "$OLD" "$NEW"
+          PLIST="$NEW/Contents/Info.plist"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleName ${PRODUCT_NAME}" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName ${PRODUCT_NAME}" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Add :CFBundleIdentifier string io.github.amster-ilvil.kcc-kindle-cn" "$PLIST" 2>/dev/null || \
+            /usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier io.github.amster-ilvil.kcc-kindle-cn" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString 1.0.0" "$PLIST" || true
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion 1" "$PLIST" || true
+          plutil -lint "$PLIST"
+
+      - name: Ad-hoc sign app and verify
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          APP="dist/${PRODUCT_NAME}.app"
+          xattr -cr "$APP" || true
+
+          # Sign nested Mach-O binaries first. This avoids relying on --deep as a signing strategy.
+          while IFS= read -r -d '' f; do
+            if /usr/bin/file "$f" | grep -q 'Mach-O'; then
+              /usr/bin/codesign --force --sign - --timestamp=none "$f"
+            fi
+          done < <(find "$APP/Contents" -type f -print0)
+
+          # Sign nested bundles/frameworks from deepest path upward.
+          while IFS= read -r bundle; do
+            /usr/bin/codesign --force --sign - --timestamp=none "$bundle" || true
+          done < <(find "$APP/Contents" \( -name '*.framework' -o -name '*.dylib' -o -name '*.so' \) -print | awk '{ print length, $0 }' | sort -rn | cut -d' ' -f2-)
+
+          /usr/bin/codesign --force --sign - --timestamp=none "$APP"
+          /usr/bin/codesign --verify --deep --strict --verbose=2 "$APP"
+          /usr/bin/codesign -dv --verbose=4 "$APP" 2>&1 | tee ../codesign-info.txt
+
+      - name: Smoke-check bundled executable
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          APP="dist/${PRODUCT_NAME}.app"
+          EXE="$APP/Contents/MacOS/Kindle Comic Converter"
+          test -x "$EXE"
+          /usr/bin/file "$EXE" | tee ../binary-info.txt
+          /usr/bin/file "$EXE" | grep -q 'arm64'
+          plutil -p "$APP/Contents/Info.plist" | tee ../plist-info.txt
+
+      - name: Package .app zip preserving macOS metadata
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          mkdir -p package
+          ditto -c -k --sequesterRsrc --keepParent "dist/${PRODUCT_NAME}.app" "package/${PRODUCT_NAME}.app.zip"
+
+      - name: Create DMG with hdiutil
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          STAGE="dmg-stage"
+          rm -rf "$STAGE"
+          mkdir -p "$STAGE"
+          ditto "dist/${PRODUCT_NAME}.app" "$STAGE/${PRODUCT_NAME}.app"
+          ln -s /Applications "$STAGE/Applications"
+          hdiutil create \
+            -volname "${PRODUCT_NAME}" \
+            -srcfolder "$STAGE" \
+            -ov \
+            -format UDZO \
+            "package/${DMG_NAME}"
+          hdiutil verify "package/${DMG_NAME}"
+
+      - name: Generate checksums and build report
+        shell: bash
+        working-directory: upstream
+        run: |
+          set -euo pipefail
+          cd package
+          shasum -a 256 "${PRODUCT_NAME}.app.zip" "${DMG_NAME}" > SHA256SUMS.txt
+          {
+            echo "KCC Kindle 中文版 build report"
+            echo "Upstream: v11.0.1 @ ${UPSTREAM_COMMIT}"
+            echo "Runner: $(sw_vers -productVersion) / $(uname -m)"
+            echo "Python: $(python --version 2>&1)"
+            echo "Built: $(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+            echo
+            cat SHA256SUMS.txt
+          } > BUILD-INFO.txt
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: KCC-Kindle-CN-AppleSilicon
+          path: |
+            upstream/package/${{ env.PRODUCT_NAME }}.app.zip
+            upstream/package/${{ env.DMG_NAME }}
+            upstream/package/SHA256SUMS.txt
+            upstream/package/BUILD-INFO.txt
+            codesign-info.txt
+            binary-info.txt
+            plist-info.txt
+          if-no-files-found: error
+          compression-level: 0
+          retention-days: 30
