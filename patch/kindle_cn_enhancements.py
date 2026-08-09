@@ -6,13 +6,68 @@ rebase and audit.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, QTimer
+import os
+from pathlib import Path
+
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QFontDatabase
-from PySide6.QtWidgets import QLabel, QPushButton, QHBoxLayout, QSystemTrayIcon
+from PySide6.QtWidgets import (
+    QFileDialog,
+    QHBoxLayout,
+    QInputDialog,
+    QLabel,
+    QMessageBox,
+    QProgressDialog,
+    QPushButton,
+    QSystemTrayIcon,
+)
+
+from .kindle_cn_compress import CompressionCancelled, compress_sources, summarize_results
 
 ACCENT = "#2F6FEB"
 MUTED = "#6E7781"
 _TRAY_PATCHED = False
+
+
+class _CompressionWorker(QThread):
+    progressChanged = Signal(int, int, str)
+    completed = Signal(object)
+    failed = Signal(str)
+    cancelled = Signal()
+
+    def __init__(self, sources, output_dir, strip_metadata, parent=None):
+        super().__init__(parent)
+        self.sources = list(sources)
+        self.output_dir = output_dir
+        self.strip_metadata = bool(strip_metadata)
+        self._cancel_requested = False
+
+    def request_cancel(self):
+        self._cancel_requested = True
+
+    def _is_cancelled(self):
+        return self._cancel_requested
+
+    def _progress(self, done, total, label):
+        self.progressChanged.emit(int(done), int(total), str(label))
+
+    def run(self):
+        try:
+            result = compress_sources(
+                self.sources,
+                self.output_dir,
+                strip_metadata=self.strip_metadata,
+                progress_cb=self._progress,
+                cancel_cb=self._is_cancelled,
+            )
+            if self._cancel_requested:
+                self.cancelled.emit()
+            else:
+                self.completed.emit(result)
+        except CompressionCancelled:
+            self.cancelled.emit()
+        except Exception as exc:
+            self.failed.emit(str(exc))
 
 
 def _set_check(widget, state):
@@ -21,14 +76,28 @@ def _set_check(widget, state):
 
 
 def _source_count(job_list):
-    count = 0
+    return len(_queued_source_paths(job_list))
+
+
+def _queued_source_paths(job_list):
+    paths = []
+    seen = set()
     for i in range(job_list.count()):
         item = job_list.item(i)
-        # KCC runtime messages have a QLabel installed as item widget; actual
-        # source paths do not. This lets the counter ignore log/status rows.
-        if item is not None and job_list.itemWidget(item) is None and item.text().strip():
-            count += 1
-    return count
+        if item is None or job_list.itemWidget(item) is not None:
+            continue
+        text = item.text().strip()
+        if not text:
+            continue
+        path = Path(text).expanduser()
+        if not path.exists():
+            continue
+        key = os.path.normcase(os.path.abspath(os.fspath(path)))
+        if key in seen:
+            continue
+        seen.add(key)
+        paths.append(os.fspath(path))
+    return paths
 
 
 def _install_safe_tray_show():
@@ -47,9 +116,39 @@ def _install_safe_tray_show():
     _TRAY_PATCHED = True
 
 
+def _select_compression_sources(window, ui):
+    queued = _queued_source_paths(ui.jobList)
+    if queued:
+        return queued
+
+    chooser = QMessageBox(window)
+    chooser.setWindowTitle("压缩生成文件")
+    chooser.setIcon(QMessageBox.Icon.Information)
+    chooser.setText("当前转换队列为空。请选择要无损压缩的来源。")
+    chooser.setInformativeText("支持 JPG/JPEG/PNG、CBZ/ZIP/EPUB 和图片文件夹。")
+    files_button = chooser.addButton("选择文件", QMessageBox.ButtonRole.AcceptRole)
+    folder_button = chooser.addButton("选择文件夹", QMessageBox.ButtonRole.ActionRole)
+    chooser.addButton("取消", QMessageBox.ButtonRole.RejectRole)
+    chooser.exec()
+    clicked = chooser.clickedButton()
+
+    start_dir = getattr(ui, "lastPath", "") or str(Path.home())
+    if clicked is files_button:
+        files, _ = QFileDialog.getOpenFileNames(
+            window,
+            "选择要无损压缩的文件",
+            start_dir,
+            "支持的文件 (*.cbz *.zip *.epub *.jpg *.jpeg *.png);;所有文件 (*.*)",
+        )
+        return files
+    if clicked is folder_button:
+        folder = QFileDialog.getExistingDirectory(window, "选择图片文件夹", start_dir)
+        return [folder] if folder else []
+    return []
+
+
 def install_enhancements(ui, window):
-    """Add queue statistics, device guidance and one-click safe presets."""
-    # Use the native macOS UI font instead of Qt's generic Sans Serif alias.
+    """Add queue statistics, device guidance, presets and lossless compression."""
     try:
         window.setFont(QFontDatabase.systemFont(QFontDatabase.SystemFont.GeneralFont))
     except Exception:
@@ -72,8 +171,6 @@ def install_enhancements(ui, window):
             ui.queueSummaryLabel.setText(f"已加入 {count} 个转换任务")
 
     def schedule_queue_update(*_):
-        # addMessage() installs the QLabel item-widget just after rowsInserted;
-        # delay one event-loop turn so messages are not counted as sources.
         QTimer.singleShot(0, update_queue_summary)
         QTimer.singleShot(40, update_queue_summary)
 
@@ -103,7 +200,7 @@ def install_enhancements(ui, window):
 
     def format_text(name: str) -> str:
         if "MOBI/AZW3" in name:
-            return "MOBI/AZW3 需要 KindleGen/Kindle Previewer 转换组件；适合 USB 侧载。"
+            return "MOBI/AZW3 使用 App 内置 Kindling 引擎生成，适合 USB 侧载。"
         if "Send to Kindle" in name and "EPUB" in name:
             return "EPUB（Send to Kindle）适合通过 Amazon 的 Send to Kindle 流程发送。"
         if name.startswith("PDF"):
@@ -136,9 +233,20 @@ def install_enhancements(ui, window):
     standard_btn = QPushButton("标准日漫")
     scan_btn = QPushButton("扫描件优化")
     device_btn = QPushButton("刷新设备默认")
+    compress_btn = QPushButton("压缩生成文件")
+    ui.losslessCompressButton = compress_btn
+
     standard_btn.setToolTip("应用保守的日漫推荐设置，不启用删除源文件等危险选项。")
     scan_btn.setToolTip("加强白边/页码裁切与黑白阶处理，适合扫描漫画。")
     device_btn.setToolTip("重新应用当前 Kindle 设备的 KCC 原生默认格式、缩放和彩色策略。")
+    compress_btn.setToolTip(
+        "独立无损压缩：JPEG 使用 MozJPEG 无损优化，PNG 优先使用 OxiPNG；"
+        "支持文件夹、JPG/PNG、CBZ/ZIP/EPUB，生成新文件且不覆盖源文件。"
+    )
+    compress_btn.setStyleSheet(
+        "QPushButton { padding: 7px 12px; font-weight: 600; }"
+        f"QPushButton:hover {{ color: {ACCENT}; }}"
+    )
 
     def standard_preset():
         _set_check(ui.mangaBox, Qt.CheckState.Checked)
@@ -155,7 +263,7 @@ def install_enhancements(ui, window):
         _set_check(ui.mangaBox, Qt.CheckState.Checked)
         _set_check(ui.croppingBox, Qt.CheckState.Checked)
         _set_check(ui.autoLevelBox, Qt.CheckState.Checked)
-        _set_check(ui.autocontrastBox, Qt.CheckState.Unchecked)  # upstream: BW-only autocontrast
+        _set_check(ui.autocontrastBox, Qt.CheckState.Unchecked)
         _set_check(ui.smartCoverCropBox, Qt.CheckState.Checked)
         _set_check(ui.deleteBox, Qt.CheckState.Unchecked)
         window.statusBar().showMessage("已应用“扫描件优化”设置", 3500)
@@ -167,12 +275,97 @@ def install_enhancements(ui, window):
         except Exception as exc:
             window.statusBar().showMessage(f"刷新设备设置失败：{exc}", 5000)
 
+    def start_lossless_compression():
+        current = getattr(ui, "_compressionWorker", None)
+        if current is not None and current.isRunning():
+            QMessageBox.information(window, "压缩生成文件", "已有压缩任务正在运行。")
+            return
+
+        sources = _select_compression_sources(window, ui)
+        if not sources:
+            return
+
+        mode_items = [
+            "体积优先（像素无损，清理无关 EXIF/XMP）",
+            "严格无损（保留图片元数据）",
+        ]
+        mode, ok = QInputDialog.getItem(
+            window,
+            "压缩模式",
+            "选择压缩策略：",
+            mode_items,
+            0,
+            False,
+        )
+        if not ok:
+            return
+        strip_metadata = mode == mode_items[0]
+
+        suggested = getattr(ui, "targetDirectory", "") or getattr(ui, "lastPath", "") or str(Path.home())
+        output_dir = QFileDialog.getExistingDirectory(window, "选择压缩文件输出目录", suggested)
+        if not output_dir:
+            return
+
+        progress = QProgressDialog("正在准备无损压缩…", "取消", 0, 0, window)
+        progress.setWindowTitle("压缩生成文件")
+        progress.setWindowModality(Qt.WindowModality.WindowModal)
+        progress.setMinimumDuration(0)
+        progress.setAutoClose(False)
+        progress.setAutoReset(False)
+        progress.setValue(0)
+        progress.show()
+
+        worker = _CompressionWorker(sources, output_dir, strip_metadata, window)
+        ui._compressionWorker = worker
+        ui._compressionProgress = progress
+        compress_btn.setEnabled(False)
+        window.statusBar().showMessage("正在无损压缩并生成新文件…")
+
+        def update_progress(done, total, label):
+            progress.setLabelText(label)
+            if total > 0:
+                if progress.maximum() != total:
+                    progress.setRange(0, total)
+                progress.setValue(min(done, total))
+            else:
+                progress.setRange(0, 0)
+
+        def cleanup():
+            progress.close()
+            compress_btn.setEnabled(True)
+            ui._compressionWorker = None
+            ui._compressionProgress = None
+
+        def completed(results):
+            cleanup()
+            window.statusBar().showMessage("无损压缩完成", 5000)
+            QMessageBox.information(window, "压缩完成", summarize_results(results))
+
+        def failed(message):
+            cleanup()
+            window.statusBar().showMessage("压缩失败", 5000)
+            QMessageBox.critical(window, "压缩失败", message)
+
+        def cancelled():
+            cleanup()
+            window.statusBar().showMessage("已取消压缩", 3500)
+
+        progress.canceled.connect(worker.request_cancel)
+        worker.progressChanged.connect(update_progress)
+        worker.completed.connect(completed)
+        worker.failed.connect(failed)
+        worker.cancelled.connect(cancelled)
+        worker.finished.connect(worker.deleteLater)
+        worker.start()
+
     standard_btn.clicked.connect(standard_preset)
     scan_btn.clicked.connect(scan_preset)
     device_btn.clicked.connect(device_defaults)
+    compress_btn.clicked.connect(start_lossless_compression)
     preset_row.addWidget(standard_btn)
     preset_row.addWidget(scan_btn)
     preset_row.addWidget(device_btn)
+    preset_row.addWidget(compress_btn)
 
     if device_parent and device_parent.layout():
         device_parent.layout().addLayout(preset_row)
