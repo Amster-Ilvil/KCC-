@@ -6,35 +6,40 @@
 
 ```text
 assets/
-├── project_avatar.webp.b64       # 固定头像源数据，CI 的单一真源
-└── project_avatar.webp           # CI 自动解码并写回，供 GitHub/README 直接预览
+├── project_avatar.webp.b64.01 ~ .08  # 固定头像源数据分片，CI 的单一真源
+└── project_avatar.webp               # CI 自动解码并写回，供 GitHub/README 直接预览
 
 build/
-└── make_icon.py                  # 从头像源生成 macOS 全尺寸 iconset
+└── make_icon.py                      # 拼接头像源并生成 macOS 全尺寸 iconset
 
 .github/workflows/
-├── build-macos-arm64.yml         # 主 Apple Silicon 编译、签名、App 打包
-├── finalize-avatar-dmg.yml       # DMG 卷图标、最终 DMG 验证和 Release 覆盖
-└── rebuild-on-avatar-change.yml  # 头像源变更时触发主编译
+├── build-macos-arm64.yml             # 主 Apple Silicon 编译、签名、App 打包
+├── finalize-avatar-dmg.yml           # DMG 卷图标、最终 DMG 验证和 Release 覆盖
+└── rebuild-on-avatar-change.yml      # 任一头像分片变更时触发主编译
 
 docs/
-├── AVATAR_INTEGRATION.md         # 本文件
-└── RELEASE_SIGNING.md            # Mac 本地重新签名与重新制作 DMG
+├── AVATAR_INTEGRATION.md             # 本文件
+└── RELEASE_SIGNING.md                # Mac 本地重新签名与重新制作 DMG
 ```
+
+头像采用多个小型 base64 分片，是为了避免通过自动化接口提交大型单行文本时被截断。`build/make_icon.py` 会按文件名顺序拼接，并使用 `base64.b64decode(..., validate=True)` 严格校验，再检查 RIFF/WEBP 文件头；任何分片缺失、乱序或损坏都会让 CI 直接失败，不会静默生成错误图标。
 
 ## App 图标生成
 
-主构建原有步骤会运行：
+主构建运行：
 
 ```bash
 python ../build/make_icon.py icons/KCCKindle.iconset
 iconutil -c icns icons/KCCKindle.iconset -o icons/comic2ebook.icns
 ```
 
-`build/make_icon.py` 已改为读取：
+`build/make_icon.py` 默认按顺序读取：
 
 ```text
-assets/project_avatar.webp.b64
+assets/project_avatar.webp.b64.01
+assets/project_avatar.webp.b64.02
+...
+assets/project_avatar.webp.b64.08
 ```
 
 并生成标准 macOS iconset：
@@ -92,7 +97,7 @@ cmp \
 
 ## GitHub 项目首页头像
 
-`finalize-avatar-dmg.yml` 会把 base64 源解码为正常的：
+`finalize-avatar-dmg.yml` 会按顺序拼接 `.b64.01 ~ .08`，解码为正常的：
 
 ```text
 assets/project_avatar.webp
@@ -110,12 +115,12 @@ README 使用：
 
 ## 以后替换头像
 
-只需要更新：
+将新头像转为 WebP 后重新生成同一组：
 
 ```text
-assets/project_avatar.webp.b64
+assets/project_avatar.webp.b64.01 ~ .08
 ```
 
-`rebuild-on-avatar-change.yml` 会自动触发 Apple Silicon 主构建；主构建成功后，`finalize-avatar-dmg.yml` 会同步可预览头像并重新制作带同一卷图标的 DMG。
+分片数量可以变化，只要文件名采用可排序的两位序号即可。`rebuild-on-avatar-change.yml` 会在任一 `assets/project_avatar.webp.b64.*` 变化时自动触发 Apple Silicon 主构建；主构建成功后，`finalize-avatar-dmg.yml` 会同步可预览头像并重新制作带同一卷图标的 DMG。
 
 不要手工修改 `assets/project_avatar.webp`，它属于由源数据自动生成的可预览文件。
