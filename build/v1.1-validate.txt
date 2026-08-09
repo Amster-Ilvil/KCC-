@@ -1,0 +1,1 @@
+KCC Kindle 中文版 v1.1 macOS Apple Silicon CI 验证。
