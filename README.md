@@ -2,10 +2,10 @@
 
 基于 **Kindle Comic Converter 11.0.1** 的 Kindle 专用简体中文改造版，面向 macOS Apple Silicon。
 
-[![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-black?logo=apple)](https://github.com/Amster-Ilvil/KCC-/actions)
+![macOS Apple Silicon](https://img.shields.io/badge/macOS-Apple%20Silicon-black?logo=apple)
 [![KCC upstream](https://img.shields.io/badge/upstream-KCC%2011.0.1-2f6feb)](https://github.com/ciromattia/kcc)
 [![Kindling](https://img.shields.io/badge/MOBI-Kindling%200.31.0-2f6feb)](https://github.com/ciscoriordan/kindling)
-[![Chinese UI](https://img.shields.io/badge/UI-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-2f6feb)](https://github.com/Amster-Ilvil/KCC-)
+![Chinese UI](https://img.shields.io/badge/UI-%E7%AE%80%E4%BD%93%E4%B8%AD%E6%96%87-2f6feb)
 
 > Kindle-only · 简体中文 · Apple Silicon 原生构建 · 内置 MOBI/AZW3 引擎
 
@@ -73,6 +73,7 @@ Kindling 提供 KindleGen drop-in compatibility；KCC 继续使用成熟的 EPUB
 自动构建流程包括：
 
 - Python 3.11 arm64
+- 源码隐私扫描：阻止本机用户目录、个人邮箱、私钥、常见 Token 和个人账号标识进入提交/构建
 - Kindling v0.31.0 Release 下载、版本验证与 SHA-256 digest 校验
 - Kindling `arm64` Mach-O 验证
 - MOBI/AZW3 resolver 自动测试
@@ -80,7 +81,6 @@ Kindling 提供 KindleGen drop-in compatibility；KCC 继续使用成熟的 EPUB
 - 实际两页测试漫画 CBZ 转换
 - **实际两页测试漫画 MOBI/AZW3 转换**
 - 对生成 MOBI 执行 Kindling `dump` 结构解析
-- 检查 KindleGen 兼容成功状态 `:I1036:`
 - PyInstaller 原生 App 构建
 - 将 Kindling 和 MIT LICENSE 内置进 App
 - macOS `.icns` 图标生成
@@ -89,6 +89,15 @@ Kindling 提供 KindleGen drop-in compatibility；KCC 继续使用成熟的 EPUB
 - 实际 Qt GUI 启动冒烟测试
 - `hdiutil` 创建并验证 DMG
 - 自动生成 SHA-256
+
+App 使用中性的 Bundle Identifier：`org.kcc.kindlecn`，不把仓库拥有者用户名写入应用元数据。
+
+## 隐私说明
+
+- 不在仓库中保存本机用户名、真实姓名、私人邮箱、访问令牌、API Key、SSH 私钥或用户主目录绝对路径。
+- 构建发生在 GitHub 托管 Runner；构建日志中的 `/Users/runner/...` 属于临时 CI 环境，不是开发者本机路径。
+- Release 构建信息仅记录版本、架构、依赖摘要、测试状态和校验值。
+- `build/privacy_scan.py` 会在 CI 中持续检查常见隐私/密钥泄漏模式。
 
 ## 签名说明
 
