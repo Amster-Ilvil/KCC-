@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/readme_banner.png" alt="KCC Kindle 中文版">
+  <img src="assets/kcc_readme_banner.svg" alt="KCC Kindle 中文版" width="100%">
 </p>
 
 <h1 align="center">KCC Kindle 中文版</h1>
