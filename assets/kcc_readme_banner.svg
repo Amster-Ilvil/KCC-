@@ -1,0 +1,129 @@
+<svg width="1600" height="562" viewBox="0 0 1600 562" fill="none" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="title desc">
+  <title id="title">KCC Kindle 中文版</title>
+  <desc id="desc">KCC Kindle 中文版 README 横幅</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1600" y2="562" gradientUnits="userSpaceOnUse">
+      <stop stop-color="#F8FBFF"/>
+      <stop offset="0.62" stop-color="#EEF5FF"/>
+      <stop offset="1" stop-color="#DDEBFF"/>
+    </linearGradient>
+    <linearGradient id="blue" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#4C8BE8"/>
+      <stop offset="1" stop-color="#2F6DC8"/>
+    </linearGradient>
+    <linearGradient id="panel" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#2D5E9A"/>
+      <stop offset="1" stop-color="#153A6D"/>
+    </linearGradient>
+    <linearGradient id="hair" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#21184E"/>
+      <stop offset="0.55" stop-color="#37256C"/>
+      <stop offset="1" stop-color="#171339"/>
+    </linearGradient>
+    <linearGradient id="skin" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#FFF7F3"/>
+      <stop offset="1" stop-color="#F2C7C1"/>
+    </linearGradient>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="10" stdDeviation="16" flood-color="#315A92" flood-opacity="0.20"/>
+    </filter>
+  </defs>
+
+  <rect width="1600" height="562" rx="42" fill="url(#bg)"/>
+  <path d="M0 324C128 280 264 304 347 390C395 440 420 504 424 562H0V324Z" fill="#DCEBFF" opacity="0.75"/>
+  <path d="M1285 0H1600V412C1519 403 1467 368 1420 317C1358 249 1312 145 1285 0Z" fill="#C8DCF7" opacity="0.78"/>
+
+  <g opacity="0.42" fill="#6FA0E6">
+    <circle cx="47" cy="52" r="4"/><circle cx="78" cy="52" r="4"/><circle cx="109" cy="52" r="4"/><circle cx="140" cy="52" r="4"/>
+    <circle cx="47" cy="83" r="4"/><circle cx="78" cy="83" r="4"/><circle cx="109" cy="83" r="4"/><circle cx="140" cy="83" r="4"/>
+  </g>
+
+  <!-- KCC app mark -->
+  <g transform="translate(66 101)">
+    <rect x="0" y="0" width="102" height="124" rx="17" fill="#467FD4"/>
+    <rect x="24" y="24" width="92" height="112" rx="17" fill="#F9FBFF" stroke="#467FD4" stroke-width="4"/>
+    <text x="69" y="98" text-anchor="middle" font-size="58" font-family="Arial, Helvetica, sans-serif" font-weight="700" fill="#467FD4">K</text>
+  </g>
+
+  <!-- Main copy -->
+  <text x="218" y="177" font-size="76" font-family="Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" fill="#0C2E61" font-weight="760" letter-spacing="-2">KCC Kindle 中文版</text>
+  <text x="220" y="226" font-size="36" font-family="Arial, Helvetica, sans-serif" fill="#3269AB" font-weight="500">Kindle Comic Converter 11.0.1</text>
+
+  <g stroke="#4E8FE4" stroke-width="3" stroke-linecap="round">
+    <path d="M220 258H778"/>
+    <path d="M862 258H946"/>
+  </g>
+  <g transform="translate(808 239)" fill="#4E8FE4">
+    <path d="M0 12H31L22 3L27-2L45 16L27 34L22 29L31 20H0V12Z"/>
+    <path d="M45 43H14L23 52L18 57L0 39L18 21L23 26L14 35H45V43Z" transform="scale(.7) translate(17 -4)"/>
+  </g>
+
+  <text x="220" y="329" font-size="28" font-family="Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" fill="#3269AB" font-weight="700">Kindle-only · 简体中文 · Apple Silicon · MOBI / AZW3 · 本地无损压缩</text>
+  <text x="220" y="375" font-size="22" font-family="Arial, 'PingFang SC', 'Microsoft YaHei', sans-serif" fill="#58769B">漫画转换 · CBZ / ZIP / EPUB · Kindling · OxiPNG · macOS 原生构建</text>
+
+  <!-- format pills -->
+  <g font-family="Arial, Helvetica, sans-serif" font-size="20" font-weight="700" text-anchor="middle">
+    <g transform="translate(220 421)"><rect width="114" height="45" rx="15" fill="#F9FBFF" stroke="#A7C8F4" stroke-width="2"/><text x="57" y="29" fill="#3269AB">Kindle</text></g>
+    <g transform="translate(348 421)"><rect width="100" height="45" rx="15" fill="#F9FBFF" stroke="#A7C8F4" stroke-width="2"/><text x="50" y="29" fill="#3269AB">MOBI</text></g>
+    <g transform="translate(462 421)"><rect width="100" height="45" rx="15" fill="#F9FBFF" stroke="#A7C8F4" stroke-width="2"/><text x="50" y="29" fill="#3269AB">AZW3</text></g>
+    <g transform="translate(576 421)"><rect width="100" height="45" rx="15" fill="#F9FBFF" stroke="#A7C8F4" stroke-width="2"/><text x="50" y="29" fill="#3269AB">CBZ</text></g>
+    <g transform="translate(690 421)"><rect width="100" height="45" rx="15" fill="#F9FBFF" stroke="#A7C8F4" stroke-width="2"/><text x="50" y="29" fill="#3269AB">EPUB</text></g>
+  </g>
+
+  <!-- right illustration card -->
+  <g filter="url(#shadow)">
+    <rect x="1068" y="44" width="470" height="468" rx="54" fill="url(#panel)"/>
+  </g>
+  <g opacity="0.22" stroke="#9FC3EE" stroke-width="2">
+    <path d="M1320 81H1481"/><path d="M1320 100H1481"/><path d="M1320 119H1456"/>
+    <rect x="1388" y="165" width="114" height="144" rx="12"/>
+    <path d="M1405 191H1485M1405 208H1485M1405 225H1473"/>
+  </g>
+
+  <!-- manga girl -->
+  <g transform="translate(1085 66)">
+    <path d="M178 27C105 29 55 82 50 160C47 216 64 279 44 356C86 329 127 337 157 352C201 374 275 366 307 328C340 289 344 220 331 155C317 84 267 23 178 27Z" fill="url(#hair)" stroke="#111038" stroke-width="5"/>
+    <path d="M98 137C99 84 132 56 181 54C232 52 269 85 270 139L265 217C262 259 228 291 181 292C133 294 101 265 95 224C91 197 93 164 98 137Z" fill="url(#skin)" stroke="#B97C80" stroke-width="3"/>
+    <path d="M87 135C91 75 132 38 190 39C244 40 281 78 288 129C266 104 235 91 201 92C154 93 119 111 87 135Z" fill="url(#hair)" stroke="#15123C" stroke-width="4"/>
+    <path d="M108 112C123 78 145 60 171 54C154 84 150 105 154 131M170 94C183 70 199 59 216 57C208 82 209 104 219 124M223 96C238 76 254 69 270 70C256 92 252 112 257 134" stroke="#59408D" stroke-width="5" stroke-linecap="round"/>
+    <path d="M124 176C140 162 162 162 176 176" stroke="#342A43" stroke-width="5" stroke-linecap="round"/>
+    <path d="M201 171C216 157 238 157 252 171" stroke="#342A43" stroke-width="5" stroke-linecap="round"/>
+    <ellipse cx="151" cy="185" rx="14" ry="20" fill="#6E56B8"/>
+    <ellipse cx="226" cy="180" rx="14" ry="20" fill="#6E56B8"/>
+    <ellipse cx="151" cy="183" rx="7" ry="12" fill="#C6B7FF"/><ellipse cx="226" cy="178" rx="7" ry="12" fill="#C6B7FF"/>
+    <circle cx="147" cy="177" r="4" fill="white"/><circle cx="222" cy="172" r="4" fill="white"/>
+    <path d="M187 193L183 202L191 202" stroke="#D28A89" stroke-width="2.5" stroke-linecap="round"/>
+    <path d="M170 221C184 233 199 233 212 219" stroke="#A24E62" stroke-width="3" stroke-linecap="round"/>
+    <ellipse cx="122" cy="219" rx="19" ry="7" fill="#F2A5B0" opacity="0.32"/><ellipse cx="241" cy="214" rx="19" ry="7" fill="#F2A5B0" opacity="0.32"/>
+    <path d="M144 284V318C144 332 160 340 178 340C196 340 210 331 210 316V282" fill="url(#skin)" stroke="#B97C80" stroke-width="3"/>
+    <path d="M86 421C92 351 126 318 169 309C183 329 210 330 225 306C273 313 303 349 313 421H86Z" fill="#162C61" stroke="#0B173E" stroke-width="4"/>
+    <path d="M147 316L179 346L210 313L226 339L181 391L132 342L147 316Z" fill="#EEF4FF" stroke="#93AAD0" stroke-width="3"/>
+    <path d="M179 346L195 367L181 414L164 366L179 346Z" fill="#457DD2"/>
+  </g>
+
+  <!-- conversion mini icon -->
+  <g transform="translate(1356 73)">
+    <rect width="64" height="72" rx="11" fill="#F9FBFF" stroke="#8EB5E8" stroke-width="3"/>
+    <path d="M13 17H29V33H13V17ZM35 17H51V33H35V17ZM13 39H29V55H13V39ZM35 39H51V55H35V39Z" stroke="#31547F" stroke-width="2"/>
+    <path d="M72 36H133" stroke="white" stroke-width="8" stroke-linecap="round"/>
+    <path d="M119 20L139 36L119 52" fill="white"/>
+    <rect x="144" y="8" width="42" height="58" rx="8" fill="#F8FBFF" stroke="#0A2A56" stroke-width="4"/>
+    <text x="165" y="45" text-anchor="middle" font-size="23" font-family="Arial" font-weight="700" fill="#3479D5">K</text>
+  </g>
+
+  <!-- Kindle device -->
+  <g transform="translate(1382 252) rotate(5)">
+    <rect width="125" height="205" rx="13" fill="#0C1D35" stroke="#4C91E7" stroke-width="3"/>
+    <rect x="12" y="21" width="101" height="153" rx="5" fill="#FAFAF7"/>
+    <rect x="16" y="25" width="42" height="20" rx="5" fill="#3479D5"/>
+    <text x="37" y="40" text-anchor="middle" font-size="12" font-family="Arial" font-weight="700" fill="white">KCC</text>
+    <path d="M20 57H61V106H20V57ZM66 57H105V106H66V57ZM20 111H61V162H20V111ZM66 111H105V162H66V111Z" stroke="#3F4F62" stroke-width="1.5"/>
+    <circle cx="40" cy="81" r="13" stroke="#78838F" stroke-width="1.5"/>
+    <path d="M33 81C36 76 39 76 42 81M42 81C45 76 48 76 51 81" stroke="#78838F" stroke-width="1.4"/>
+    <path d="M31 137H48" stroke="#2E7CDA" stroke-width="4" stroke-linecap="round"/><path d="M46 129L59 137L46 145" fill="#2E7CDA"/>
+    <text x="14" y="193" font-size="13" font-family="Arial" font-weight="700" fill="#E9EFF8">Kindle</text>
+  </g>
+
+  <rect x="1096" y="451" width="112" height="38" rx="19" fill="#102F5D" opacity="0.92"/>
+  <text x="1152" y="476" text-anchor="middle" font-size="16" font-family="Arial, 'PingFang SC', sans-serif" font-weight="700" fill="white">KCC 中文版</text>
+</svg>
