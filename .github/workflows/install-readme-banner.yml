@@ -16,10 +16,12 @@ jobs:
       GH_TOKEN: ${{ github.token }}
     steps:
       - uses: actions/checkout@v4
-      - name: Rebuild banner and update README
+
+      - name: Rebuild, validate and install banner
         shell: bash
         run: |
           set -euo pipefail
+
           : > /tmp/readme_banner.b64
           for sha in \
             4bca8ec5cd8f05bbf9ef7800a4e7129741d2b2e8 \
@@ -37,25 +39,57 @@ jobs:
           done
 
           base64 -d /tmp/readme_banner.b64 > assets/readme_banner.webp
-          echo "98a869c12632ebf7112212806bc9a0eb503c284239637b1bb0e9e11a375b4099  assets/readme_banner.webp" | sha256sum -c -
 
           python - <<'PY'
           from pathlib import Path
-          p = Path("README.md")
-          s = p.read_text(encoding="utf-8")
+          import hashlib
+
+          image = Path("assets/readme_banner.webp")
+          data = image.read_bytes()
+
+          if len(data) < 30 or data[:4] != b"RIFF" or data[8:12] != b"WEBP":
+              raise SystemExit("Rebuilt banner is not a valid WebP RIFF file")
+
+          declared_size = int.from_bytes(data[4:8], "little") + 8
+          if declared_size != len(data):
+              raise SystemExit(
+                  f"WebP size mismatch: RIFF declares {declared_size} bytes, got {len(data)}"
+              )
+
+          if data[12:16] != b"VP8X":
+              raise SystemExit("Expected VP8X WebP banner")
+
+          width = int.from_bytes(data[24:27], "little") + 1
+          height = int.from_bytes(data[27:30], "little") + 1
+          if (width, height) != (2048, 720):
+              raise SystemExit(f"Unexpected banner dimensions: {width}x{height}")
+
+          print(f"Validated banner: {width}x{height}, {len(data)} bytes")
+          print("SHA-256:", hashlib.sha256(data).hexdigest())
+
+          readme = Path("README.md")
+          text = readme.read_text(encoding="utf-8")
+
           old = '''<p align="center">
             <img src="assets/project_avatar.webp" width="180" alt="KCC Kindle 中文版项目头像">
           </p>'''
           new = '''<p align="center">
-            <img src="assets/readme_banner.webp" width="100%" alt="KCC Kindle 中文版">
+            <img src="assets/readme_banner.webp" alt="KCC Kindle 中文版">
           </p>'''
-          if old not in s:
-              raise SystemExit("README avatar block not found")
-          p.write_text(s.replace(old, new, 1), encoding="utf-8")
+
+          if old in text:
+              text = text.replace(old, new, 1)
+          elif new not in text:
+              raise SystemExit("README top image block is neither the old icon nor the new banner")
+
+          readme.write_text(text, encoding="utf-8")
           PY
+
+          # This workflow is only a one-time binary installer. Remove it after success.
+          rm -f .github/workflows/install-readme-banner.yml
 
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add README.md assets/readme_banner.webp
+          git add -A
           git commit -m "docs: replace README icon with banner"
           git push
