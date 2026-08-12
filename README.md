@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="assets/project_avatar.webp" width="180" alt="KCC Kindle 中文版项目头像">
+  <img src="assets/readme_banner.webp" alt="KCC Kindle 中文版">
 </p>
 
 <h1 align="center">KCC Kindle 中文版</h1>
